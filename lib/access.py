@@ -23,6 +23,7 @@ from __future__ import annotations
 from pathlib import Path
 import hashlib
 import json
+import os
 import secrets
 
 STORE = Path.home() / ".config" / "thetadesk_users.json"
@@ -78,6 +79,16 @@ def verify_pw(pw: str, stored: str) -> bool:
 
 # ── store ────────────────────────────────────────────────────────────────
 def _load() -> dict:
+    # TG_USERS_JSON env var: base64-encoded users JSON (for Vercel / read-only envs)
+    _env = os.environ.get("TG_USERS_JSON", "")
+    if _env:
+        try:
+            import base64 as _b64
+            d = json.loads(_b64.b64decode(_env).decode())
+            if isinstance(d, dict) and isinstance(d.get("users"), dict):
+                return d
+        except Exception:
+            pass
     if STORE.exists():
         try:
             d = json.loads(STORE.read_text())

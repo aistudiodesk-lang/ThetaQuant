@@ -44,6 +44,11 @@ _WEB_CRED_FILE = Path.home() / ".config" / "thetadesk_web.json"
 
 
 def _web_creds() -> dict:
+    # Env-var override: set TG_WEB_USERNAME + TG_WEB_PASSWORD in Vercel (or any env)
+    _env_u = _os.environ.get("TG_WEB_USERNAME", "")
+    _env_p = _os.environ.get("TG_WEB_PASSWORD", "")
+    if _env_u and _env_p:
+        return {"username": _env_u, "password": _env_p}
     if _WEB_CRED_FILE.exists():
         try:
             return json.loads(_WEB_CRED_FILE.read_text())
