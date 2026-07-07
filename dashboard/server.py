@@ -85,6 +85,13 @@ _SESSION_TTL = 30 * 24 * 3600         # 30 days
 
 
 def _session_secret() -> bytes:
+    # Env var takes priority (required on Vercel where filesystem is ephemeral)
+    _env = _os.environ.get("TG_SESSION_SECRET", "")
+    if _env:
+        try:
+            return bytes.fromhex(_env)
+        except Exception:
+            return _env.encode()
     try:
         if _SESSION_FILE.exists():
             return bytes.fromhex(_SESSION_FILE.read_text().strip())
