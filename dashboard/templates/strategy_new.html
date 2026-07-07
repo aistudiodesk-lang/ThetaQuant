@@ -1,0 +1,57 @@
+{% extends "base.html" %}
+{% block title %}New Strategy · Theta Quant{% endblock %}
+{% block content %}
+<div class="space-y-5" x-data="newStrat()" x-init="load()">
+ <div>
+ <h1 class="text-xl font-bold tracking-tight">Other Strategies</h1>
+ <div class="text-[12px] text-[var(--text-3)]">Commodity lives here, and you can create your own strategy — each becomes a desk (positions, entry, monitoring) and flows into reporting.</div>
+ </div>
+
+ <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+ <!-- create form -->
+ <div class="card p-4 space-y-2">
+ <div class="text-[12px] font-bold mb-1">Create a strategy</div>
+ <input x-model="ns.name" placeholder="Strategy name (e.g. Calendar Spreads)" class="w-full text-[12px] border border-[var(--border)] rounded px-2 py-1.5">
+ <select x-model="ns.kind" class="w-full text-[12px] border border-[var(--border)] rounded px-2 py-1.5">
+ <template x-for="[k,label] in Object.entries(d.kinds||{})" :key="k"><option :value="k" x-text="label"></option></template>
+ </select>
+ <input x-model="ns.instruments" placeholder="Instruments (comma sep, optional)" class="w-full text-[12px] border border-[var(--border)] rounded px-2 py-1.5">
+ <input x-model="ns.note" placeholder="Note (optional)" class="w-full text-[12px] border border-[var(--border)] rounded px-2 py-1.5">
+ <button @click="create()" class="text-[12px] px-4 py-1.5 rounded-md bg-accent-600 text-white font-bold">Create strategy</button>
+ <span class="text-[11px] block" x-text="status"></span>
+ </div>
+
+ <!-- existing list -->
+ <div class="lg:col-span-2 space-y-2">
+ <a href="/commodity" class="card p-3 flex items-center justify-between hover:ring-2 hover:ring-accent-300">
+ <span class="font-semibold text-[13px]">Commodity <span class="text-[10px] text-[var(--text-3)]">(S7)</span></span>
+ <span class="text-[11px] text-[var(--text-3)]">open desk →</span>
+ </a>
+ <template x-for="s in d.strategies||[]" :key="s.slug">
+ <div class="card p-3 flex items-center justify-between">
+ <a :href="'/other/desk/'+s.slug" class="flex-1">
+ <div class="font-semibold text-[13px]" x-text="''+s.name"></div>
+ <div class="text-[10px] text-[var(--text-3)]" x-text="(d.kinds[s.kind]||s.kind)+(s.instruments?.length?(' · '+s.instruments.join(', ')):'')"></div>
+ </a>
+ <button @click="del(s)" class="text-[11px] text-loss-600 ml-3">✕</button>
+ </div>
+ </template>
+ <div x-show="!(d.strategies||[]).length" class="text-[11px] text-[var(--text-3)] px-1">No custom strategies yet.</div>
+ </div>
+ </div>
+</div>
+<script>
+function newStrat(){
+ return {
+ d:{strategies:[],kinds:{}}, status:'', ns:{name:'',kind:'generic',instruments:'',note:''},
+ async load(){ try{ this.d=await fetch('/api/strategy/custom').then(r=>r.json()); }catch(e){} },
+ async create(){ if(!this.ns.name){ this.status='✗ name required'; return; } this.status='creating…';
+ try{ const j=await fetch('/api/strategy/custom',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(this.ns)}).then(r=>r.json());
+ if(j.saved){ this.status='✓ created'; this.ns={name:'',kind:'generic',instruments:'',note:''}; await this.load(); window.location='/other/desk/'+j.strategy.slug; }
+ else this.status='✗ '+(j.error||'failed');
+ }catch(e){ this.status='✗ '+e; } },
+ async del(s){ if(!confirm('Delete '+s.name+'? (trades stay in the journal)'))return; await fetch('/api/strategy/custom/delete',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({slug:s.slug})}); await this.load(); },
+ };
+}
+</script>
+{% endblock %}

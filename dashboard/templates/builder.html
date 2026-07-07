@@ -1,0 +1,291 @@
+{% extends "base.html" %}
+{% block title %}Strategy Builder · Theta Quant{% endblock %}
+{% block content %}
+<div class="space-y-4" x-data="builder()" x-init="init()">
+
+  <div class="flex items-end justify-between gap-3 flex-wrap">
+    <div>
+      <h1 class="text-[21px] font-bold tracking-tight">Strategy Builder</h1>
+      <div class="text-[12px] text-[var(--text-3)]">Build any multi-leg position → payoff, breakevens, POP, greeks, <b>margin &amp; yield/Cr</b>, live premiums → <b>append to Report</b>. The one place for strike work.</div>
+    </div>
+    <div class="flex items-center gap-2 text-[12px]">
+      <label class="flex items-center gap-1"><span class="text-[var(--text-3)]">Instrument</span>
+        <select x-model="inst" @change="syncLot()" class="border border-[var(--border)] rounded-lg px-2 py-1.5 font-semibold">
+          <option>NIFTY</option><option>SENSEX</option><option>BANKNIFTY</option><option value="STOCK">Stock</option>
+        </select></label>
+      <label class="flex items-center gap-1"><span class="text-[var(--text-3)]">Spot</span>
+        <input x-model.number="spot" type="number" class="num w-24 border border-[var(--border)] rounded-lg px-2 py-1.5 font-semibold"></label>
+      <label class="flex items-center gap-1"><span class="text-[var(--text-3)]">Lot</span>
+        <input x-model.number="lot" type="number" class="num w-16 border border-[var(--border)] rounded-lg px-2 py-1.5"></label>
+      <label class="flex items-center gap-1"><span class="text-[var(--text-3)]">IV%</span>
+        <input x-model.number="iv" type="number" step="0.5" class="num w-16 border border-[var(--border)] rounded-lg px-2 py-1.5" title="Annualised implied volatility (defaults to VIX for index)"></label>
+      <label class="flex items-center gap-1"><span class="text-[var(--text-3)]">DTE</span>
+        <input x-model.number="dte" type="number" class="num w-14 border border-[var(--border)] rounded-lg px-2 py-1.5" title="Days to expiry"></label>
+      <button @click="loadSpot()" class="text-[11px] px-2 py-1.5 rounded-md border border-[var(--border)]" :disabled="!liveOk" :class="liveOk?'':'opacity-40'">↻ live</button>
+    </div>
+  </div>
+
+  <!-- what-if scenario sliders: stress the structure at any spot & any day before expiry -->
+  <div class="card p-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px]">
+    <span class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">What-if</span>
+    <div class="flex items-center gap-2 flex-1 min-w-[220px]">
+      <span class="text-[var(--text-3)] whitespace-nowrap">Underlying</span>
+      <input type="range" :min="xMin" :max="xMax" :step="instStep" x-model.number="whatSpot" class="flex-1 accent-[var(--blue)]">
+      <span class="num font-semibold w-20 text-right" x-text="fmt(whatSpot)"></span>
+      <span class="num text-[10px] w-12 text-right" :class="whatSpot>=spot?'text-gain-600':'text-loss-600'" x-text="(whatSpot>=spot?'+':'')+((whatSpot-spot)/spot*100).toFixed(1)+'%'"></span>
+    </div>
+    <div class="flex items-center gap-2 flex-1 min-w-[200px]">
+      <span class="text-[var(--text-3)] whitespace-nowrap">Days left</span>
+      <input type="range" min="0" :max="dte" step="1" x-model.number="whatDte" class="flex-1 accent-[var(--blue)]">
+      <span class="num font-semibold w-16 text-right" x-text="whatDte+'d'"></span>
+    </div>
+    <button @click="whatSpot=spot; whatDte=dte" class="text-[11px] text-[var(--blue)] font-semibold">reset</button>
+    <div class="num text-[12px] whitespace-nowrap">P&L now: <b :class="(whatPnl??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(whatPnl)"></b></div>
+  </div>
+
+  <!-- presets -->
+  <div class="flex flex-wrap items-center gap-1.5 text-[11px]">
+    <span class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mr-1">Quick build</span>
+    <template x-for="p in presets" :key="p.name">
+      <button @click="applyPreset(p)" class="px-2.5 py-1 rounded-md border border-[var(--border)] hover:bg-[var(--bg)] font-medium" x-text="p.name"></button>
+    </template>
+    <button @click="legs=[]" class="px-2.5 py-1 rounded-md text-loss-600 font-medium ml-1">clear</button>
+  </div>
+
+  <div class="grid lg:grid-cols-2 gap-4">
+    <!-- LEGS -->
+    <div class="card p-0 overflow-hidden">
+      <div class="px-4 py-2.5 border-b border-[var(--border)] flex items-center justify-between">
+        <div class="text-[12.5px] font-semibold">Legs</div>
+        <button @click="addLeg()" class="text-[11px] font-semibold text-white rounded-md px-2.5 py-1" style="background:var(--blue)">+ Leg</button>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="data-table">
+          <thead><tr><th>B/S</th><th>Type</th><th class="text-right">Strike</th><th class="text-right">Lots</th><th class="text-right">Price</th><th></th></tr></thead>
+          <tbody>
+            <template x-for="(l,i) in legs" :key="i">
+              <tr>
+                <td><select x-model="l.side" class="num"><option>Sell</option><option>Buy</option></select></td>
+                <td><select x-model="l.type" class="num"><option>CE</option><option>PE</option><option>FUT</option></select></td>
+                <td><input x-model.number="l.strike" type="number" class="num w-20 text-right border border-[var(--border)] rounded px-1.5 py-1" :placeholder="l.type==='FUT'?'entry':'strike'"></td>
+                <td><input x-model.number="l.lots" type="number" class="num w-14 text-right border border-[var(--border)] rounded px-1.5 py-1"></td>
+                <td><input x-model.number="l.price" type="number" class="num w-20 text-right border border-[var(--border)] rounded px-1.5 py-1" placeholder="premium"></td>
+                <td class="text-right"><button @click="legs.splice(i,1)" class="text-[12px] text-loss-600">✕</button></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+      <div x-show="!legs.length" class="p-8 text-center text-[var(--text-3)] text-[12px]">Add legs or pick a quick build above.</div>
+      <!-- stats -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-px bg-[var(--border)] border-t border-[var(--border)]">
+        <div class="bg-[var(--surface)] p-3"><div class="kpil">Net premium</div><div class="num font-bold" :class="(stats.netPrem??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(stats.netPrem)"></div><div class="kpis" x-text="(stats.netPrem>=0?'credit':'debit')"></div></div>
+        <div class="bg-[var(--surface)] p-3"><div class="kpil">Max profit</div><div class="num font-bold text-gain-600" x-text="stats.maxProfit==null?'—':(stats.maxProfit===Infinity?'Unlimited':money(stats.maxProfit))"></div></div>
+        <div class="bg-[var(--surface)] p-3"><div class="kpil">Max loss</div><div class="num font-bold text-loss-600" x-text="stats.maxLoss==null?'—':(stats.maxLoss===-Infinity?'Unlimited':money(stats.maxLoss))"></div></div>
+        <div class="bg-[var(--surface)] p-3"><div class="kpil">Breakeven(s)</div><div class="num font-semibold text-[13px]" x-text="stats.bes.length?stats.bes.map(b=>Math.round(b).toLocaleString('en-IN')).join(' / '):'—'"></div></div>
+      </div>
+      <!-- probability + greeks (IV-driven) -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-px bg-[var(--border)] border-t border-[var(--border)]">
+        <div class="bg-[var(--surface)] p-3"><div class="kpil">Prob. of profit</div>
+          <div class="num font-bold" :class="pop>=68?'text-gain-600':pop>=50?'text-warn-600':'text-loss-600'" x-text="pop!=null?pop+'%':'—'"></div>
+          <div class="kpis" x-text="sdLabel"></div></div>
+        <div class="bg-[var(--surface)] p-3"><div class="kpil">Net delta</div><div class="num font-bold" x-text="greeks.delta!=null?greeks.delta.toFixed(1):'—'"></div><div class="kpis">per ₹ move</div></div>
+        <div class="bg-[var(--surface)] p-3"><div class="kpil">Theta / day</div><div class="num font-bold" :class="(greeks.theta??0)>=0?'text-gain-600':'text-loss-600'" x-text="greeks.theta!=null?money(greeks.theta):'—'"></div><div class="kpis">decay</div></div>
+        <div class="bg-[var(--surface)] p-3"><div class="kpil">Vega</div><div class="num font-bold" x-text="greeks.vega!=null?money(greeks.vega):'—'"></div><div class="kpis">per 1% IV</div></div>
+      </div>
+      <!-- MARGIN + YIELD (ported from the strike explorer) -->
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-px bg-[var(--border)] border-t border-[var(--border)]">
+        <div class="bg-[var(--surface)] p-3"><div class="kpil">Margin (≈SPAN)</div><div class="num font-bold" x-text="margin!=null?money(margin):'—'"></div><div class="kpis" x-text="capitalCr!=null?(capitalCr.toFixed(2)+' Cr'):''"></div></div>
+        <div class="bg-[var(--surface)] p-3"><div class="kpil">Yield / Cr</div><div class="num font-bold" :class="(yieldCr||0)>=7500?'text-gain-600':(yieldCr!=null?'text-warn-600':'')" x-text="yieldCr!=null?('₹'+yieldCr.toLocaleString('en-IN')+'/Cr'):'—'"></div><div class="kpis">premium ÷ margin</div></div>
+        <div class="bg-[var(--surface)] p-3"><div class="kpil">Yield %</div><div class="num font-bold" x-text="(margin&&stats.netPrem>0)?((stats.netPrem/margin*100).toFixed(2)+'%'):'—'"></div><div class="kpis">on margin</div></div>
+        <div class="bg-[var(--surface)] p-3 flex flex-col justify-center"><button @click="fillLive()" :disabled="!liveOk" :class="liveOk?'':'opacity-40'" class="text-[11px] font-semibold rounded-md px-2 py-1.5 border border-[var(--blue)] text-[var(--blue)]">↻ Fill live premiums</button></div>
+      </div>
+      <!-- APPEND TO REPORT -->
+      <div class="p-3 border-t border-[var(--border)] flex flex-wrap items-center gap-2 text-[12px]">
+        <span class="text-[var(--text-3)] text-[11px]">Save to report:</span>
+        <select x-model="sgroup" class="border border-[var(--border)] rounded px-2 py-1 text-[11px]"><option>Expiry</option><option>Index</option><option>Covered Calls</option><option>Commodity</option><option>Investment</option></select>
+        <input x-model="broker" placeholder="broker" class="num border border-[var(--border)] rounded px-2 py-1 w-24 text-[11px]">
+        <button @click="saveToReport()" :disabled="savingReport || !legs.length" class="text-[11px] font-semibold text-white rounded-md px-3 py-1.5 disabled:opacity-40" style="background:var(--blue)" x-text="savingReport?'Saving…':'Append to Report'"></button>
+        <button @click="tgWhatsApp(tgTradeText({strategy_name: inst+' '+sgroup, instrument: inst, legs: legs, per_cr: yieldCr}))" :disabled="!legs.length" class="text-[11px] font-semibold rounded-md px-3 py-1.5 border disabled:opacity-40" style="border-color:#25D36688;color:#1DA851" title="Forward this trade to WhatsApp">↗ WhatsApp</button>
+        <span class="text-[11px]" :class="reportMsg.startsWith('✓')?'text-gain-600':'text-loss-600'" x-text="reportMsg"></span>
+      </div>
+    </div>
+
+    <!-- PAYOFF -->
+    <div class="card p-4">
+      <div class="flex items-center justify-between mb-1">
+        <div class="text-[12.5px] font-semibold">Payoff at expiry</div>
+        <div class="text-[11px] num" :class="(stats.pnlAtSpot??0)>=0?'text-gain-600':'text-loss-600'">at spot <b x-text="fmt(spot)"></b>: <b x-text="money(stats.pnlAtSpot)"></b></div>
+      </div>
+      <svg :viewBox="'0 0 '+W+' '+H" class="w-full" :style="'height:'+H+'px'">
+        <!-- ±1σ / ±2σ expected-move bands (IV-implied) -->
+        <template x-if="sd>0">
+          <g>
+            <rect :x="xOf(spot-2*sd)" :width="Math.max(0,xOf(spot+2*sd)-xOf(spot-2*sd))" y="0" :height="H" fill="var(--blue)" opacity="0.05"/>
+            <rect :x="xOf(spot-sd)" :width="Math.max(0,xOf(spot+sd)-xOf(spot-sd))" y="0" :height="H" fill="var(--blue)" opacity="0.07"/>
+            <template x-for="m in [[-2,'−2σ'],[-1,'−1σ'],[1,'+1σ'],[2,'+2σ']]" :key="m[0]">
+              <g>
+                <line :x1="xOf(spot+m[0]*sd)" :x2="xOf(spot+m[0]*sd)" y1="0" :y2="H" stroke="var(--blue)" stroke-width="1" opacity="0.25" stroke-dasharray="2 3"/>
+                <text :x="xOf(spot+m[0]*sd)" y="11" text-anchor="middle" font-size="8" fill="var(--blue)" opacity="0.7" x-text="m[1]"></text>
+              </g>
+            </template>
+          </g>
+        </template>
+        <!-- zero line -->
+        <line :x1="0" :x2="W" :y1="zeroY" :y2="zeroY" stroke="var(--border)" stroke-width="1"/>
+        <!-- profit/loss fills -->
+        <path :d="areaPos" fill="var(--gain-100, #d9f2e6)" opacity="0.5"/>
+        <path :d="areaNeg" fill="#fbe3e0" opacity="0.5"/>
+        <!-- T+n what-if curve (BS-valued, before expiry) -->
+        <template x-if="whatDte>0 && iv>0"><path :d="lineNow" fill="none" stroke="var(--warn-500,#e0a800)" stroke-width="1.5" stroke-dasharray="4 2" opacity="0.9"/></template>
+        <!-- payoff line at expiry -->
+        <path :d="line" fill="none" stroke="var(--blue)" stroke-width="2"/>
+        <!-- current spot marker -->
+        <line :x1="spotX" :x2="spotX" :y1="0" :y2="H" stroke="var(--text-3)" stroke-width="1" stroke-dasharray="3 3"/>
+        <!-- what-if spot marker -->
+        <line :x1="xOf(whatSpot)" :x2="xOf(whatSpot)" :y1="0" :y2="H" stroke="var(--warn-600,#b45309)" stroke-width="1.5"/>
+        <!-- breakevens -->
+        <template x-for="b in stats.bes" :key="b">
+          <line :x1="xOf(b)" :x2="xOf(b)" :y1="0" :y2="H" stroke="#d2463c" stroke-width="1" opacity="0.5"/>
+        </template>
+      </svg>
+      <div class="flex justify-between text-[10px] text-[var(--text-3)] num mt-1">
+        <span x-text="fmt(xMin)"></span><span>spot at expiry</span><span x-text="fmt(xMax)"></span>
+      </div>
+      <div class="flex flex-wrap gap-x-3 gap-y-0.5 text-[10px] text-[var(--text-3)] mt-2">
+        <span><b class="text-[var(--blue)]">━</b> payoff at expiry</span>
+        <span x-show="whatDte>0"><b style="color:var(--warn-600,#b45309)">┅</b> P&L now (T+<span x-text="dte-whatDte"></span>d, BS)</span>
+        <span><span class="inline-block w-3 h-2 align-middle" style="background:var(--blue);opacity:.12"></span> ±1σ/±2σ expected move (<span x-text="sd?('±'+fmt(sd)+' @1σ'):'—'"></span>)</span>
+        <span style="color:var(--warn-700,#92400e)">│ what-if spot</span>
+      </div>
+      <div class="text-[10px] text-[var(--text-3)] mt-1.5">Blue band = where IV says the underlying lands ~68% (1σ) / ~95% (2σ) of the time by expiry. For deep-OTM selling, you want <b>both short strikes outside ±2σ</b>. POP = chance the structure finishes profitable (lognormal, current IV). Dashed amber = mark-to-market today via Black-Scholes; excludes brokerage.</div>
+    </div>
+  </div>
+</div>
+
+<style>
+.kpil{font-size:9px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-3);font-weight:600}
+.kpis{font-size:9px;color:var(--text-3)}
+</style>
+<script>
+function builder(){
+  const LOTS={NIFTY:75,SENSEX:20,BANKNIFTY:35,STOCK:1};
+  const MARGIN={NIFTY:235000,SENSEX:250000,BANKNIFTY:250000,STOCK:0};  // ~SPAN ₹/lot
+  return {
+    inst:'NIFTY', spot:24000, lot:75, liveOk:false,
+    iv:14, dte:7, whatSpot:24000, whatDte:7,
+    legs:[], W:560, H:240,
+    sgroup:'Expiry', broker:'', savingReport:false, reportMsg:'',
+    // MARGIN (strangle-offset for short options + futures) and yield/Cr — the explorer's sizing
+    get margin(){ const mpl=MARGIN[this.inst]||0; if(!mpl) return null;
+      let ce=0,pe=0,fut=0; for(const l of this.legs){ const lots=l.lots||0;
+        if(l.type==='FUT') fut+=lots; else if(l.side==='Sell'){ if(l.type==='CE') ce+=lots; else pe+=lots; } }
+      return Math.round((Math.max(ce,pe)+fut)*mpl); },
+    get yieldCr(){ const m=this.margin; if(!m||this.stats.netPrem<=0) return null; return Math.round(this.stats.netPrem/(m/1e7)); },
+    get capitalCr(){ const m=this.margin; return m?(m/1e7):null; },
+    async fillLive(){ try{ const k=this.inst==='BANKNIFTY'?'NIFTY':this.inst;
+      const j=await fetch(`/api/chain/${k}?distance_pct=10`).then(r=>r.json());
+      const rows={}; (j.rows||[]).forEach(r=>rows[r.strike]=r);
+      this.legs.forEach(l=>{ if(l.type==='FUT') return; const row=rows[l.strike];
+        if(row){ const p=row[l.type==='CE'?'ce_ltp':'pe_ltp']; if(p!=null) l.price=p; } });
+    }catch(e){} },
+    async saveToReport(){ if(!this.legs.length) return; this.savingReport=true; this.reportMsg='';
+      const legs=this.legs.filter(l=>l.lots).map(l=>({ strike:l.strike||null, side:l.type, leg_type:l.type,
+        qty:(l.lots*this.lot)*(l.side==='Sell'?-1:1), price:l.price||0 }));
+      try{ const j=await fetch('/api/journal/trade',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({instrument:this.inst==='STOCK'?'STOCK':this.inst, tier:this.sgroup, strategy_group:this.sgroup,
+          legs, broker:this.broker, source:'builder', margin_at_entry:this.margin, note:'built in Strategy Builder'})}).then(r=>r.json());
+        this.reportMsg=j.saved?'✓ Saved to Report':('✗ '+(j.error||'failed'));
+      }catch(e){ this.reportMsg='✗ '+e; } this.savingReport=false; },
+    get instStep(){ return this.inst==='STOCK'?1:(this.inst==='SENSEX'?100:50); },
+    presets:[
+      {name:'Short Strangle', build:s=>[{side:'Sell',type:'CE',strike:r(s*1.03),lots:1,price:40},{side:'Sell',type:'PE',strike:r(s*0.97),lots:1,price:40}]},
+      {name:'Short Straddle', build:s=>[{side:'Sell',type:'CE',strike:r(s),lots:1,price:120},{side:'Sell',type:'PE',strike:r(s),lots:1,price:120}]},
+      {name:'Iron Condor', build:s=>[{side:'Sell',type:'CE',strike:r(s*1.03),lots:1,price:40},{side:'Buy',type:'CE',strike:r(s*1.05),lots:1,price:18},{side:'Sell',type:'PE',strike:r(s*0.97),lots:1,price:40},{side:'Buy',type:'PE',strike:r(s*0.95),lots:1,price:18}]},
+      {name:'Bull Call Spread', build:s=>[{side:'Buy',type:'CE',strike:r(s),lots:1,price:120},{side:'Sell',type:'CE',strike:r(s*1.03),lots:1,price:50}]},
+      {name:'Covered Call', build:s=>[{side:'Buy',type:'FUT',strike:r(s),lots:1,price:0},{side:'Sell',type:'CE',strike:r(s*1.04),lots:1,price:35}]},
+    ],
+    init(){ this.syncLot(); this.loadSpot(); if(!this.legs.length) this.applyPreset(this.presets[0]); this.whatSpot=this.spot; this.whatDte=this.dte; },
+    syncLot(){ this.lot=LOTS[this.inst]||1; },
+    async loadSpot(){ try{ const j=await fetch('/api/snapshot').then(r=>r.json()); const k=this.inst==='BANKNIFTY'?'NIFTY':this.inst; if(j[k]&&j[k].spot){ this.spot=Math.round(j[k].spot); this.whatSpot=this.spot; this.liveOk=true; } if(j.vix){ this.iv=j.vix; } }catch(e){} },
+    // --- Black-Scholes (for greeks, POP, and the T+n mark-to-market curve) ---
+    _ncdf(x){ const a1=0.254829592,a2=-0.284496736,a3=1.421413741,a4=-1.453152027,a5=1.061405429,p=0.3275911;
+      const s=x<0?-1:1; x=Math.abs(x)/Math.SQRT2; const t=1/(1+p*x);
+      const y=1-(((((a5*t+a4)*t)+a3)*t+a2)*t+a1)*t*Math.exp(-x*x); return 0.5*(1+s*y); },
+    _npdf(x){ return Math.exp(-x*x/2)/Math.sqrt(2*Math.PI); },
+    bs(S,K,T,sig,type){ const r=0.065;
+      if(T<=0||sig<=0||S<=0||K<=0){ const intr=type==='CE'?Math.max(0,S-K):Math.max(0,K-S);
+        return {price:intr, delta:(type==='CE'?(S>K?1:0):(S<K?-1:0)), theta:0, vega:0}; }
+      const vt=sig*Math.sqrt(T); const d1=(Math.log(S/K)+(r+0.5*sig*sig)*T)/vt; const d2=d1-vt;
+      const Nd1=this._ncdf(d1), Nd2=this._ncdf(d2); let price,delta;
+      if(type==='CE'){ price=S*Nd1-K*Math.exp(-r*T)*Nd2; delta=Nd1; }
+      else { price=K*Math.exp(-r*T)*this._ncdf(-d2)-S*this._ncdf(-d1); delta=Nd1-1; }
+      const vega=S*this._npdf(d1)*Math.sqrt(T)/100;
+      const t1=-(S*this._npdf(d1)*sig)/(2*Math.sqrt(T));
+      const theta=(type==='CE'?(t1-r*K*Math.exp(-r*T)*Nd2):(t1+r*K*Math.exp(-r*T)*this._ncdf(-d2)))/365;
+      return {price,delta,theta,vega}; },
+    // MTM P&L of the whole structure at spot S with `dl` days left (dl=0 → expiry intrinsic)
+    valueAtTime(S,dl){ const sig=this.iv/100, T=dl/365;
+      return this.legs.reduce((a,l)=>{ const q=(l.lots||0)*this.lot; if(!q) return a;
+        if(l.type==='FUT'){ const d=(S-(l.strike||0)); return a+(l.side==='Sell'?-d:d)*q; }
+        let cur; if(dl<=0||sig<=0){ cur=l.type==='CE'?Math.max(0,S-(l.strike||0)):Math.max(0,(l.strike||0)-S); }
+          else cur=this.bs(S,l.strike||0,T,sig,l.type).price;
+        const per=l.side==='Buy'?(cur-(l.price||0)):((l.price||0)-cur); return a+per*q; },0); },
+    get whatPnl(){ return this.valueAtTime(this.whatSpot, this.whatDte); },
+    get sd(){ if(!this.iv||!this.dte||!this.spot) return 0; return this.spot*(this.iv/100)*Math.sqrt(this.dte/365); },
+    get sdLabel(){ if(!this.sd) return ''; return '±'+this.fmt(this.sd)+' ('+(this.sd/this.spot*100).toFixed(1)+'%) @1σ'; },
+    get pop(){ if(!this.legs.length||!this.iv||!this.dte) return null;
+      const sig=this.iv/100, T=this.dte/365; if(sig<=0||T<=0) return null;
+      const vt=sig*Math.sqrt(T); const mu=Math.log(this.spot)-0.5*sig*sig*T;  // zero-drift lognormal
+      const n=400, loS=Math.log(this.spot)-5*vt, hiS=Math.log(this.spot)+5*vt; let pP=0,pT=0;
+      for(let i=0;i<n;i++){ const lx=loS+(hiS-loS)*(i+0.5)/n; const S=Math.exp(lx);
+        const z=(lx-mu)/vt, w=Math.exp(-0.5*z*z); pT+=w; if(this.pnlAt(S)>0) pP+=w; }
+      return pT?Math.round(pP/pT*100):null; },
+    get greeks(){ if(!this.legs.length||!this.iv||!this.dte) return {delta:null,theta:null,vega:null};
+      const sig=this.iv/100, T=this.dte/365; let dl=0,th=0,vg=0;
+      for(const l of this.legs){ const q=(l.lots||0)*this.lot; if(!q) continue; const sign=l.side==='Buy'?1:-1;
+        if(l.type==='FUT'){ dl+=sign*q; continue; }
+        const g=this.bs(this.spot,l.strike||0,T,sig,l.type); dl+=sign*g.delta*q; th+=sign*g.theta*q; vg+=sign*g.vega*q; }
+      return {delta:dl, theta:th, vega:vg}; },
+    get curveNow(){ const n=120,out=[]; for(let i=0;i<=n;i++){ const S=this.xMin+(this.xMax-this.xMin)*i/n; out.push([S,this.valueAtTime(S,this.whatDte)]); } return out; },
+    get lineNow(){ return 'M'+this.curveNow.map(p=>this.xOf(p[0]).toFixed(1)+','+this.yOf(p[1]).toFixed(1)).join(' L'); },
+    addLeg(){ this.legs.push({side:'Sell',type:'CE',strike:r(this.spot*1.03),lots:1,price:30}); },
+    applyPreset(p){ this.legs=p.build(this.spot).map(l=>({...l})); },
+    money(v){ if(v==null||!isFinite(v)) return v===Infinity?'Unlimited':(v===-Infinity?'Unlimited':'—'); const s=v<0?'−':'+'; const a=Math.abs(v); if(a>=1e7)return s+'₹'+(a/1e7).toFixed(2)+'Cr'; if(a>=1e5)return s+'₹'+(a/1e5).toFixed(2)+'L'; return s+'₹'+Math.round(a).toLocaleString('en-IN'); },
+    fmt(v){ return v?Math.round(v).toLocaleString('en-IN'):'0'; },
+    // per-unit P&L of a leg at expiry spot S
+    legPnl(l,S){ const q=(l.lots||0)*this.lot; if(!q) return 0;
+      if(l.type==='FUT'){ const d=(S-(l.strike||0)); return (l.side==='Sell'?-d:d)*q; }
+      const intr=l.type==='CE'?Math.max(0,S-(l.strike||0)):Math.max(0,(l.strike||0)-S);
+      const per=l.side==='Buy'?(intr-(l.price||0)):((l.price||0)-intr);
+      return per*q; },
+    pnlAt(S){ return this.legs.reduce((a,l)=>a+this.legPnl(l,S),0); },
+    get xMin(){ return Math.round(this.spot*0.85); },
+    get xMax(){ return Math.round(this.spot*1.15); },
+    get curve(){ const n=120, out=[]; for(let i=0;i<=n;i++){ const S=this.xMin+(this.xMax-this.xMin)*i/n; out.push([S,this.pnlAt(S)]); } return out; },
+    get stats(){
+      const c=this.curve; if(!c.length||!this.legs.length) return {netPrem:0,maxProfit:null,maxLoss:null,bes:[],pnlAtSpot:0};
+      const ys=c.map(p=>p[1]);
+      let maxP=Math.max(...ys), maxL=Math.min(...ys);
+      // unlimited detection: rising/falling at the edges
+      const naked=this.legs.some(l=>l.type!=='FUT');
+      if(ys[ys.length-1]>ys[ys.length-2]+1 && this.legs.some(l=>l.side==='Buy'&&l.type==='CE')===false && this.legs.some(l=>l.side==='Sell'&&l.type==='CE')) maxL=-Infinity;
+      // breakevens: sign changes
+      const bes=[]; for(let i=1;i<c.length;i++){ const a=c[i-1][1],b=c[i][1]; if((a<0&&b>=0)||(a>0&&b<=0)){ const t=a/(a-b); bes.push(c[i-1][0]+(c[i][0]-c[i-1][0])*t); } }
+      const netPrem=this.legs.reduce((s,l)=>{ const q=(l.lots||0)*this.lot; if(l.type==='FUT')return s; return s+(l.side==='Sell'?1:-1)*(l.price||0)*q; },0);
+      return {netPrem, maxProfit:maxP, maxLoss:maxL, bes, pnlAtSpot:this.pnlAt(this.spot)};
+    },
+    // SVG geometry
+    get _yr(){ const ys=this.curve.map(p=>p[1]); let mn=Math.min(...ys,0), mx=Math.max(...ys,0); const pad=(mx-mn)*0.1||1; return [mn-pad,mx+pad]; },
+    yOf(v){ const [mn,mx]=this._yr; return this.H-((v-mn)/((mx-mn)||1))*this.H; },
+    xOf(S){ return ((S-this.xMin)/((this.xMax-this.xMin)||1))*this.W; },
+    get zeroY(){ return this.yOf(0); },
+    get spotX(){ return this.xOf(this.spot); },
+    get line(){ return 'M'+this.curve.map(p=>this.xOf(p[0]).toFixed(1)+','+this.yOf(p[1]).toFixed(1)).join(' L'); },
+    get areaPos(){ const z=this.zeroY; return 'M'+this.curve.map(p=>this.xOf(p[0]).toFixed(1)+','+Math.min(this.yOf(p[1]),z).toFixed(1)).join(' L')+' L'+this.W+','+z+' L0,'+z+' Z'; },
+    get areaNeg(){ const z=this.zeroY; return 'M'+this.curve.map(p=>this.xOf(p[0]).toFixed(1)+','+Math.max(this.yOf(p[1]),z).toFixed(1)).join(' L')+' L'+this.W+','+z+' L0,'+z+' Z'; },
+  };
+}
+function r(v){ return Math.round(v/50)*50; }
+</script>
+{% endblock %}

@@ -1,0 +1,405 @@
+{% extends "base.html" %}
+{% block title %}Holdings · Theta Quant{% endblock %}
+{% block content %}
+<div class="space-y-4" x-data="hbook()" x-init="load()">
+
+  <div class="flex items-end justify-between gap-3 flex-wrap">
+    <div>
+      <h1 class="text-[21px] font-bold tracking-tight">Holdings</h1>
+      <div class="text-[12px] text-[var(--text-3)]">Everything you hold — equity + futures — split by strategy, with covered-call coverage. Client: <b class="text-[var(--text-1)]" x-text="client"></b> <span class="text-[var(--text-3)]">(top bar)</span></div>
+    </div>
+    <div class="flex items-center gap-2">
+      <!-- view toggle -->
+      <div class="inline-flex rounded-lg border border-[var(--border)] overflow-hidden text-[12px] font-semibold">
+        <button @click="view='holdings'" :class="view==='holdings'?'bg-[var(--text-1)] text-[var(--surface)]':'text-[var(--text-3)]'" class="px-3 py-1.5">Without calls</button>
+        <button @click="view='calls'" :class="view==='calls'?'bg-[var(--text-1)] text-[var(--surface)]':'text-[var(--text-3)]'" class="px-3 py-1.5">With calls</button>
+      </div>
+      <button @click="openNew()" class="text-[12px] font-semibold text-white rounded-lg px-3.5 py-2" style="background:var(--blue)">+ Holding</button>
+      <a href="/import" class="text-[12px] font-semibold px-3 py-2 rounded-lg border border-[var(--border)]" title="Bulk-import holdings">Import ↗</a>
+      <button @click="load()" class="text-[11px] px-2 py-1.5 rounded-md border border-[var(--border)]">↻</button>
+    </div>
+  </div>
+
+  <!-- KPI cards — recompute from the filtered set -->
+  <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+    <div class="card p-3"><div class="kpi-l">Book value</div><div class="num text-[18px] font-bold" x-text="cr(sum.value)"></div><div class="kpi-s" x-text="sum.n+' stocks'"></div></div>
+    <div class="card p-3"><div class="kpi-l">Equity</div><div class="num text-[18px] font-bold" x-text="cr(sum.equity_value)"></div><div class="kpi-s" x-text="qty(sum.equity_qty)+' sh'"></div></div>
+    <div class="card p-3"><div class="kpi-l">Futures</div><div class="num text-[18px] font-bold" x-text="cr(sum.futures_value)"></div><div class="kpi-s" x-text="qty(sum.futures_qty)+' qty'"></div></div>
+    <template x-if="view==='calls'">
+      <div class="card p-3"><div class="kpi-l">Covered</div><div class="num text-[18px] font-bold text-gain-600" x-text="qty(sum.covered_qty)"></div><div class="kpi-s" x-text="sum.covered_pct+'% of book'"></div></div>
+    </template>
+    <template x-if="view==='calls'">
+      <div class="card p-3"><div class="kpi-l">Uncovered</div><div class="num text-[18px] font-bold" :class="sum.uncovered_qty?'text-loss-600':''" x-text="qty(sum.uncovered_qty)"></div><div class="kpi-s">no call sold</div></div>
+    </template>
+    <template x-if="view!=='calls'">
+      <div class="card p-3"><div class="kpi-l">Investment</div><div class="num text-[18px] font-bold" x-text="qty(sum.by_purpose.investment)"></div></div>
+    </template>
+    <div class="card p-3"><div class="kpi-l">Total held</div><div class="num text-[18px] font-bold" x-text="qty(sum.total_qty)"></div></div>
+  </div>
+
+  <!-- filter bar -->
+  <div class="card p-3 flex flex-wrap items-center gap-2 text-[12px]">
+    <span class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mr-1">Filter</span>
+    <select x-model="f.strat" class="filt"><option value="">All strategies</option><option value="S1">S1 · CC vs investment</option><option value="S2A">S2A · regular CC</option><option value="S2B">S2B · ITM CC</option><option value="NONE">NONE · no CC</option></select>
+    <select x-model="f.type" class="filt"><option value="">Equity + Futures</option><option value="equity">Equity only</option><option value="futures">Futures only</option></select>
+    <select x-model="f.purpose" class="filt"><option value="">Inv + Trading</option><option value="investment">Investment</option><option value="trading">Trading</option></select>
+    <template x-if="view==='calls'">
+      <select x-model="f.covered" class="filt"><option value="">Covered + Uncovered</option><option value="covered">Covered only</option><option value="uncovered">Uncovered only</option></select>
+    </template>
+    <template x-if="view==='calls' && expMonths.length">
+      <select x-model="f.exp" class="filt" title="Coverage for one expiry month (e.g. calls sold for June vs July)">
+        <option value="">All expiries</option>
+        <template x-for="m in expMonths" :key="m.key"><option :value="m.key" x-text="m.label+' coverage'"></option></template>
+      </select>
+    </template>
+    <span class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold ml-1">Group</span>
+    <select x-model="groupBy" class="filt">
+      <option value="">None (flat)</option>
+      <option value="family">Family</option>
+      <option value="client">Client</option>
+      <option value="demat">Demat</option>
+      <option value="broker">Broker</option>
+      <option value="strategy">Strategy</option>
+      <option value="type">Type</option>
+      <option value="purpose">Purpose</option>
+    </select>
+    <input x-model="f.q" placeholder="search symbol…" class="filt num flex-1 min-w-[120px]">
+    <button @click="reset()" x-show="dirty" class="text-[11px] text-[var(--blue)] font-semibold">clear</button>
+    <span class="ml-auto text-[11px] text-[var(--text-3)]" x-text="rows.length+' shown'"></span>
+  </div>
+
+  <!-- holdings table -->
+  <div class="card p-0 overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="data-table">
+        <thead><tr>
+          <th class="w-6"></th><th>Stock</th>
+          <th class="text-right">Held</th>
+          <th class="text-right">Avg</th>
+          <th class="text-right">Invested</th>
+          <th class="text-right">Cur. value</th>
+          <th class="text-right">Unrealised</th>
+          <template x-if="view==='calls' && !groupBy"><th class="text-right">Covered</th></template>
+          <template x-if="view==='calls' && !groupBy"><th>Coverage</th></template>
+          <th></th>
+        </tr></thead>
+          <!-- GROUPED view: section header (with subtotal) + member rows per group -->
+          <template x-if="groupBy">
+            <template x-for="g in groups" :key="g.label">
+              <tbody>
+                <tr class="font-bold" style="background:var(--bg)">
+                  <td></td>
+                  <td class="text-[12px]"><span x-text="gbLabel(g.label)"></span> <span class="text-[10px] text-[var(--text-3)] font-normal" x-text="'· '+g.rows.length"></span></td>
+                  <td class="num text-right" x-text="qty(g.sub.qty)"></td>
+                  <td></td>
+                  <td class="num text-right" x-text="cr(g.sub.invested)"></td>
+                  <td class="num text-right" x-text="cr(g.sub.value)"></td>
+                  <td class="num text-right whitespace-nowrap">
+                    <span :class="(g.sub.unreal??0)>=0?'text-gain-600':'text-loss-600'" x-text="g.sub.unreal!=null?money(g.sub.unreal):'—'"></span>
+                    <span x-show="g.sub.unreal_pct!=null" class="text-[10px]" :class="(g.sub.unreal??0)>=0?'text-gain-600':'text-loss-600'" x-text="(g.sub.unreal_pct>=0?' +':' ')+g.sub.unreal_pct+'%'"></span>
+                  </td>
+                  <td></td>
+                </tr>
+                <template x-for="row in g.rows" :key="row.symbol">
+                  <tr>
+                    <td></td>
+                    <td class="pl-4" x-text="row.symbol"></td>
+                    <td class="num text-right" x-text="qty(row.qty)"></td>
+                    <td class="num text-right text-[var(--text-3)]" x-text="row.avg?('₹'+fmt(row.avg)):'—'"></td>
+                    <td class="num text-right" x-text="cr(row.invested)"></td>
+                    <td class="num text-right" x-text="cr(row.value)"></td>
+                    <td class="num text-right whitespace-nowrap">
+                      <span :class="(row.unreal??0)>=0?'text-gain-600':'text-loss-600'" x-text="row.unreal!=null?money(row.unreal):'—'"></span>
+                      <span x-show="row.unreal_pct!=null" class="text-[10px]" :class="(row.unreal??0)>=0?'text-gain-600':'text-loss-600'" x-text="(row.unreal_pct>=0?' +':' ')+row.unreal_pct+'%'"></span>
+                    </td>
+                    <td></td>
+                  </tr>
+                </template>
+              </tbody>
+            </template>
+          </template>
+          <!-- FLAT view: collapse-to-total + expand -->
+          <template x-if="!groupBy">
+          <template x-for="r in rows" :key="r.symbol">
+            <tbody>
+              <tr class="cursor-pointer hover:bg-[var(--bg)]" @click="toggle(r.symbol)">
+                <td class="text-[var(--text-3)]"><span x-text="open[r.symbol]?'▾':'▸'"></span></td>
+                <td class="font-semibold">
+                  <span x-text="r.symbol"></span>
+                  <span x-show="r.assignment_price" class="pill text-[9px] bg-accent-50 text-accent-700 ml-1" title="Agreed let-go / assignment price">let-go ₹<span x-text="r.assignment_price"></span></span>
+                  <div class="text-[10px] text-[var(--text-3)] num" x-show="r.current" x-text="'₹'+fmt(r.current)+(r.high52?(' · 52wH '+fmt(r.high52)):'')"></div>
+                </td>
+                <td class="num text-right font-semibold" x-text="qty(r.disp_qty)"></td>
+                <td class="num text-right text-[var(--text-3)]" x-text="r.avg?('₹'+fmt(r.avg)):'—'"></td>
+                <td class="num text-right" x-text="cr(r.disp_invested)"></td>
+                <td class="num text-right font-semibold" x-text="cr(r.disp_value)"></td>
+                <td class="num text-right whitespace-nowrap">
+                  <span :class="(r.disp_unreal??0)>=0?'text-gain-600':'text-loss-600'" x-text="r.disp_unreal!=null?money(r.disp_unreal):'—'"></span>
+                  <span x-show="r.disp_unreal_pct!=null" class="text-[10px]" :class="(r.disp_unreal??0)>=0?'text-gain-600':'text-loss-600'" x-text="(r.disp_unreal_pct>=0?' +':' ')+r.disp_unreal_pct+'%'"></span>
+                </td>
+                <template x-if="view==='calls'"><td class="num text-right text-gain-600" x-text="qty(r.covered_qty)"></td></template>
+                <template x-if="view==='calls'">
+                  <td class="min-w-[120px]">
+                    <div class="flex items-center gap-1.5">
+                      <div class="flex-1 h-1.5 rounded-full bg-[var(--bg)] overflow-hidden"><div class="h-full rounded-full" :class="r.covered_pct>=100?'bg-gain-500':'bg-warn-400'" :style="'width:'+Math.min(100,r.covered_pct)+'%'"></div></div>
+                      <span class="num text-[10px] text-[var(--text-3)]" x-text="r.covered_pct+'%'"></span>
+                    </div>
+                  </td>
+                </template>
+                <td class="text-right"><button @click.stop="edit(r)" class="text-[11px] text-[var(--text-3)] hover:text-[var(--text-1)]" title="Edit">✎</button></td>
+              </tr>
+              <!-- expanded detail -->
+              <tr x-show="open[r.symbol]" x-cloak>
+                <td></td>
+                <td :colspan="view==='calls'?9:7" class="!pt-0">
+                  <div class="grid md:grid-cols-3 gap-3 pb-2">
+                    <!-- equity vs futures -->
+                    <div class="rounded-lg border border-[var(--border)] p-2.5">
+                      <div class="kpi-l mb-1.5">Equity vs Futures</div>
+                      <div class="flex justify-between text-[12px] num"><span class="text-[var(--text-3)]">Equity</span><span class="font-semibold" x-text="qty(r.equity_qty)+'  ·  '+cr(r.equity_value)"></span></div>
+                      <div class="flex justify-between text-[12px] num mt-0.5"><span class="text-[var(--text-3)]">Futures</span><span class="font-semibold" x-text="qty(r.futures_qty)+'  ·  '+cr(r.futures_value)"></span></div>
+                    </div>
+                    <!-- strategy split -->
+                    <div class="rounded-lg border border-[var(--border)] p-2.5">
+                      <div class="kpi-l mb-1.5">Strategy-wise</div>
+                      <template x-for="b in r.buckets" :key="b.type+b.purpose+b.strategy+b.qty">
+                        <div class="flex justify-between text-[11px] num py-0.5">
+                          <span class="pill text-[9px]" :class="stratClass(b.strategy)" x-text="label(b)"></span>
+                          <span class="font-semibold" x-text="qty(b.qty)+(b.avg?(' @'+fmt(b.avg)):'')"></span>
+                        </div>
+                      </template>
+                    </div>
+                    <!-- coverage + assignment -->
+                    <div class="rounded-lg border border-[var(--border)] p-2.5">
+                      <div class="kpi-l mb-1.5" x-text="view==='calls'?'Coverage & assignment':'Assignment'"></div>
+                      <template x-if="view==='calls'">
+                        <div>
+                          <div class="flex justify-between text-[12px] num"><span class="text-[var(--text-3)]">Covered<span x-show="f.exp" class="text-[9px] text-[var(--text-3)]"> (<span x-text="expLabel(f.exp)"></span>)</span></span><span class="font-semibold text-gain-600" x-text="qty(r.covered_qty)"></span></div>
+                          <div class="flex justify-between text-[12px] num mt-0.5"><span class="text-[var(--text-3)]">Uncovered</span><span class="font-semibold" :class="r.uncovered_qty?'text-loss-600':''" x-text="qty(r.uncovered_qty)"></span></div>
+                          <!-- per-expiry coverage split (June vs July …) — a name can carry both -->
+                          <div x-show="Object.keys(r.coverage_by_expiry||{}).length>1 || (Object.keys(r.coverage_by_expiry||{}).length && !f.exp)" class="flex flex-wrap gap-1 mt-1 pt-1 border-t border-[var(--border)]">
+                            <template x-for="(q,k) in (r.coverage_by_expiry||{})" :key="k">
+                              <span class="pill text-[9px] num cursor-pointer" :class="f.exp===k?'bg-accent-100 text-accent-800':'bg-[var(--bg)] text-[var(--text-3)]'" @click="f.exp=(f.exp===k?'':k)"><span x-text="expLabel(k)"></span> <b x-text="qty(q)"></b></span>
+                            </template>
+                          </div>
+                        </div>
+                      </template>
+                      <div class="flex justify-between text-[12px] num mt-1 pt-1 border-t border-[var(--border)]">
+                        <span class="text-[var(--text-3)]">Let-go price</span>
+                        <span class="font-semibold" x-text="r.assignment_price?('₹'+fmt(r.assignment_price)):'—'"></span>
+                      </div>
+                      <div x-show="r.assignment_gain!=null" class="flex justify-between text-[11px] num mt-0.5"><span class="text-[var(--text-3)]">Upside if assigned</span><span :class="r.assignment_gain>=0?'text-gain-600':'text-loss-600'" x-text="cr(r.assignment_gain)"></span></div>
+                    </div>
+                  </div>
+                  <!-- options sold against this underlying — the full picture -->
+                  <div x-show="(r.options||[]).length" class="rounded-lg border border-[var(--border)] p-2.5 mb-2">
+                    <div class="kpi-l mb-1.5">Options sold against <span class="text-[var(--text-1)]" x-text="r.symbol"></span> <span class="text-[var(--text-3)] font-normal normal-case">— open CE/PE legs by strike & strategy</span></div>
+                    <div class="flex flex-wrap gap-1.5">
+                      <template x-for="(o,oi) in r.options" :key="oi">
+                        <span class="pill num text-[10px] flex items-center gap-0.5" :class="o.side==='CE'?'bg-warn-100 text-warn-700':'bg-accent-50 text-accent-700'">
+                          <b x-text="o.side"></b> <span x-text="o.strike"></span> · <span x-text="(o.qty||0).toLocaleString('en-IN')"></span>
+                          <span class="opacity-70" x-show="o.price"> @<span x-text="o.price"></span></span>
+                          <span class="opacity-60 text-[9px]" x-show="o.group"> · <span x-text="o.group"></span></span>
+                          <span class="opacity-50 text-[9px]" x-show="o.demat"> · <span x-text="o.demat"></span></span>
+                        </span>
+                      </template>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </template>
+          </template>
+          <tfoot x-show="(groupBy?groups.length:rows.length)">
+            <tr class="font-semibold text-white" style="background:var(--slate)">
+              <td></td>
+              <td class="text-[12.5px]">Net worth</td>
+              <td class="num text-right" x-text="qty(sum.total_qty)"></td>
+              <td></td>
+              <td class="num text-right" x-text="cr(sum.invested)"></td>
+              <td class="num text-right" x-text="cr(sum.value)"></td>
+              <td class="num text-right whitespace-nowrap">
+                <span :style="(sum.unrealised??0)>=0?'color:var(--mint)':'color:#f0a39c'" x-text="money(sum.unrealised)"></span>
+                <span x-show="sum.unrealised_pct!=null" class="text-[10px]" :style="(sum.unrealised??0)>=0?'color:var(--mint)':'color:#f0a39c'" x-text="(sum.unrealised_pct>=0?' +':' ')+sum.unrealised_pct+'%'"></span>
+              </td>
+              <template x-if="view==='calls' && !groupBy"><td class="num text-right" style="color:var(--mint)" x-text="qty(sum.covered_qty)"></td></template>
+              <template x-if="view==='calls' && !groupBy"><td class="num text-[11px]" x-text="sum.covered_pct+'% covered'"></td></template>
+              <td></td>
+            </tr>
+          </tfoot>
+      </table>
+    </div>
+    <div x-show="(groupBy?!groups.length:!rows.length)" class="p-10 text-center text-[var(--text-3)] text-[13px]">No holdings match. <span x-show="dirty">Try <b @click="reset()" class="text-[var(--blue)] cursor-pointer">clearing filters</b>, or </span>click <b>+ Holding</b> (or use <b>Import</b>).</div>
+  </div>
+
+  <div class="text-[10px] text-[var(--text-3)]">S1 = CC vs investment · S2A = regular OTM CC · S2B = ITM theta CC · NONE = trading, no CC. <b>Covered</b> = shares with a call already sold against them (from the trade ledger). <b>Let-go price</b> = the assignment price you've agreed you'd accept — set per stock, sent to the client for approval.</div>
+
+  <!-- editor modal -->
+  <div x-show="show" x-cloak class="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-3" @click.self="show=false">
+    <div class="bg-[var(--surface)] rounded-2xl p-4 sm:p-6 w-[95vw] max-w-[780px] max-h-[88vh] overflow-y-auto shadow-2xl">
+      <div class="font-bold text-[15px] mb-3" x-text="ns.symbol?('Edit '+ns.symbol):'New holding'"></div>
+      <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mb-3 text-[12px]">
+        <label class="space-y-0.5"><span class="builder-head">Underlying</span><input x-model="ns.symbol" placeholder="RELIANCE" class="num w-full border border-[var(--border)] rounded px-2 py-1 uppercase"></label>
+        <label class="space-y-0.5"><span class="builder-head">Family</span><input x-model="ns.family" placeholder="Navin Group" class="w-full border border-[var(--border)] rounded px-2 py-1"></label>
+        <label class="space-y-0.5"><span class="builder-head">Lot size</span><input x-model.number="ns.lot" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+        <label class="space-y-0.5"><span class="builder-head">Current ₹</span><input x-model.number="ns.current" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+        <label class="space-y-0.5"><span class="builder-head">52wH ₹</span><input x-model.number="ns.high52" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+        <label class="space-y-0.5"><span class="builder-head" title="Agreed assignment / let-go price">Let-go ₹</span><input x-model.number="ns.assignment_price" type="number" placeholder="OK price" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+      </div>
+      <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold mb-1.5">Buckets — split your holding by type, purpose, strategy & demat</div>
+      <div class="row-builder grid-cols-7 mb-1 px-0.5 hidden md:grid">
+        <span class="builder-head">Type</span><span class="builder-head">Purpose</span><span class="builder-head">Strategy</span><span class="builder-head">Demat</span><span class="builder-head">Qty</span><span class="builder-head">Avg ₹</span><span></span>
+      </div>
+      <template x-for="(b,i) in ns.buckets" :key="i">
+        <div class="row-builder grid-cols-2 sm:grid-cols-7 mb-1">
+          <select x-model="b.type"><option value="equity">equity</option><option value="futures">futures</option></select>
+          <select x-model="b.purpose"><option value="investment">investment</option><option value="trading">trading</option></select>
+          <select x-model="b.strategy"><option value="S1">S1 · CC vs investment</option><option value="S2A">S2A · regular CC</option><option value="S2B">S2B · ITM CC</option><option value="NONE">NONE · no CC</option></select>
+          <input x-model="b.demat" placeholder="Demat" class="num">
+          <input x-model.number="b.qty" type="number" placeholder="Qty" class="num">
+          <input x-model.number="b.avg" type="number" placeholder="Avg" class="num">
+          <button @click="ns.buckets.splice(i,1)" class="text-[12px] text-loss-600 justify-self-center" title="Remove">✕</button>
+        </div>
+      </template>
+      <button @click="ns.buckets.push({type:'equity',purpose:'investment',strategy:'S1',demat:'',qty:0,avg:null})" class="btn !py-1 !px-3 mb-3 mt-0.5">+ bucket</button>
+      <div class="flex justify-end gap-2">
+        <button @click="show=false" class="btn">Cancel</button>
+        <button @click="save()" class="text-[12px] font-semibold text-white rounded-lg px-4 py-2" style="background:var(--blue)">Save holding</button>
+      </div>
+      <div class="text-[11px] mt-2 text-right" x-text="status"></div>
+    </div>
+  </div>
+</div>
+
+<style>
+.kpi-l{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-3);font-weight:600}
+.kpi-s{font-size:9px;color:var(--text-3)}
+.filt{border:1px solid var(--border);border-radius:8px;padding:5px 8px;background:var(--surface)}
+</style>
+
+<script>
+function hbook(){
+  const SC={S1:'bg-accent-50 text-accent-700',S2A:'bg-gain-100 text-gain-700',S2B:'bg-warn-100 text-warn-700',NONE:'bg-[var(--bg)] text-[var(--text-3)]'};
+  return {
+    client:(window.tgClient?window.tgClient():'All'), d:{rows:[],totals:{}},
+    view:'holdings', open:{}, show:false, status:'', groupBy:'',
+    f:{strat:'',type:'',purpose:'',covered:'',q:'',exp:''},
+    ns:{symbol:'',family:'',lot:null,current:null,high52:null,assignment_price:null,buckets:[]},
+    async load(){ this.client=window.tgClient?window.tgClient():'All';
+      try{ this.d=await fetch('/api/holdings/book?client='+encodeURIComponent(this.client)).then(r=>r.json()); }catch(e){} },
+    get expMonths(){ return this.d.expiry_months||[]; },
+    expLabel(k){ const m=(this.d.expiry_months||[]).find(x=>x.key===k); return m?m.label:k; },
+    get dirty(){ return this.f.strat||this.f.type||this.f.purpose||this.f.covered||this.f.q||this.f.exp; },
+    reset(){ this.f={strat:'',type:'',purpose:'',covered:'',q:'',exp:''}; },
+    toggle(s){ this.open[s]=!this.open[s]; },
+    // bucket passes the active type/purpose/strategy filters
+    _pass(b){ return (!this.f.strat||b.strategy===this.f.strat) && (!this.f.type||b.type===this.f.type) && (!this.f.purpose||b.purpose===this.f.purpose); },
+    get rows(){
+      const out=[];
+      for(const r of (this.d.rows||[])){
+        if(this.f.q && !r.symbol.toLowerCase().includes(this.f.q.toLowerCase())) continue;
+        const buckets=(r.buckets||[]).filter(b=>this._pass(b));
+        if(!buckets.length) continue;
+        const dispQty=buckets.reduce((a,b)=>a+(b.qty||0),0);
+        if(!dispQty) continue;
+        const eq=buckets.filter(b=>b.type==='equity').reduce((a,b)=>a+(b.qty||0),0);
+        // coverage: all-months (sheet net) by default, or one expiry month if picked
+        let covQ=r.covered_qty, uncQ=r.uncovered_qty, options=r.options||[];
+        if(this.f.exp){
+          const cm=Math.min(eq,(r.coverage_by_expiry||{})[this.f.exp]||0);
+          covQ=cm; uncQ=Math.max(0,eq-cm);
+          options=(r.options||[]).filter(o=>o.expiry_key===this.f.exp);
+        }
+        if(this.view==='calls'){
+          if(this.f.covered==='covered' && !(covQ>0)) continue;
+          if(this.f.covered==='uncovered' && !(uncQ>0)) continue;
+        }
+        const fu=buckets.filter(b=>b.type==='futures').reduce((a,b)=>a+(b.qty||0),0);
+        const invested=buckets.reduce((a,b)=>a+((b.qty||0)*(b.avg||0)),0);
+        const value=(r.current?Math.round(dispQty*r.current):null);
+        const unreal=(value!=null&&invested)?Math.round(value-invested):null;
+        out.push({...r, buckets, options, disp_qty:dispQty, disp_value:value,
+          disp_invested:(invested?Math.round(invested):null),
+          avg:(dispQty&&invested?Math.round(invested/dispQty*100)/100:null),
+          disp_unreal:unreal, disp_unreal_pct:(unreal!=null&&invested?Math.round(unreal/invested*10000)/100:null),
+          covered_qty:covQ, uncovered_qty:uncQ,
+          covered_pct:(eq?Math.round(covQ/eq*100):0),
+          equity_qty:eq, futures_qty:fu,
+          equity_value:(r.current?Math.round(eq*r.current):null),
+          futures_value:(r.current?Math.round(fu*r.current):null)});
+      }
+      return out;
+    },
+    get sum(){
+      const s={n:0,value:0,invested:0,equity_value:0,futures_value:0,equity_qty:0,futures_qty:0,
+        total_qty:0,covered_qty:0,uncovered_qty:0,by_purpose:{investment:0,trading:0}};
+      for(const r of this.rows){
+        s.n++; s.value+=r.disp_value||0; s.invested+=r.disp_invested||0;
+        s.equity_value+=r.equity_value||0; s.futures_value+=r.futures_value||0;
+        s.equity_qty+=r.equity_qty||0; s.futures_qty+=r.futures_qty||0; s.total_qty+=r.disp_qty||0;
+        s.covered_qty+=r.covered_qty||0; s.uncovered_qty+=r.uncovered_qty||0;
+        for(const b of r.buckets){ s.by_purpose[b.purpose]=(s.by_purpose[b.purpose]||0)+(b.qty||0); }
+      }
+      s.covered_pct=s.total_qty?Math.round(s.covered_qty/s.total_qty*100):0;
+      s.unrealised=s.invested?Math.round(s.value-s.invested):null;
+      s.unrealised_pct=s.invested?Math.round((s.value-s.invested)/s.invested*10000)/100:null;
+      return s;
+    },
+    _gkey(r,b){ const gb=this.groupBy;
+      if(gb==='strategy') return b.strategy||'NONE';
+      if(gb==='type') return b.type||'equity';
+      if(gb==='purpose') return b.purpose||'investment';
+      if(gb==='demat') return b.demat||'(no demat)';
+      if(gb==='broker') return b.broker||'(no broker)';
+      if(gb==='client') return r.client||'RHS';
+      if(gb==='family') return r.family||'(no family)';
+      return ''; },
+    get groups(){
+      if(!this.groupBy) return [];
+      const G={};
+      for(const r of (this.d.rows||[])){
+        if(this.f.q && !r.symbol.toLowerCase().includes(this.f.q.toLowerCase())) continue;
+        for(const b of (r.buckets||[])){
+          if(!this._pass(b)) continue;
+          const key=this._gkey(r,b);
+          const grp=G[key]||(G[key]={key,rows:{}});
+          const e=grp.rows[r.symbol]||(grp.rows[r.symbol]={symbol:r.symbol,current:r.current,qty:0,invested:0});
+          e.qty+=(b.qty||0); e.invested+=((b.qty||0)*(b.avg||0));
+        }
+      }
+      return Object.values(G).map(grp=>{
+        const rows=Object.values(grp.rows).map(e=>{
+          const value=e.current?Math.round(e.qty*e.current):null;
+          const unreal=(value!=null&&e.invested)?Math.round(value-e.invested):null;
+          return {symbol:e.symbol, qty:e.qty, value,
+            avg:(e.qty&&e.invested?Math.round(e.invested/e.qty*100)/100:null),
+            invested:(e.invested?Math.round(e.invested):null), unreal,
+            unreal_pct:(unreal!=null&&e.invested?Math.round(unreal/e.invested*10000)/100:null)};
+        }).sort((a,b)=>(b.value||0)-(a.value||0));
+        const sub=rows.reduce((s,r)=>{s.qty+=r.qty||0;s.invested+=r.invested||0;s.value+=r.value||0;return s;},{qty:0,invested:0,value:0});
+        sub.unreal=sub.invested?Math.round(sub.value-sub.invested):null;
+        sub.unreal_pct=sub.invested?Math.round((sub.value-sub.invested)/sub.invested*10000)/100:null;
+        return {label:grp.key, rows, sub};
+      }).sort((a,b)=>(b.sub.value||0)-(a.sub.value||0));
+    },
+    gbLabel(k){ const M={S1:'S1 · CC vs investment',S2A:'S2A · regular CC',S2B:'S2B · ITM CC',NONE:'NONE · no CC',equity:'Equity',futures:'Futures',investment:'Investment',trading:'Trading'}; return M[k]||k; },
+    _saveClient(){ return (this.client&&this.client!=='All')?this.client:'RHS'; },
+    cr(v){ return (v||v===0)? '₹'+(v/1e7).toFixed(2)+'Cr' : '—'; },
+    money(v){ if(v==null) return '—'; const s=v<0?'−':'+'; const a=Math.abs(v); if(a>=1e7) return s+'₹'+(a/1e7).toFixed(2)+'Cr'; if(a>=1e5) return s+'₹'+(a/1e5).toFixed(2)+'L'; return s+'₹'+Math.round(a).toLocaleString('en-IN'); },
+    qty(v){ return v?Math.round(v).toLocaleString('en-IN'):'—'; },
+    fmt(v){ return v?(+v).toLocaleString('en-IN'):''; },
+    stratClass(s){ return SC[s]||SC.NONE; },
+    label(b){ return b.strategy+' · '+b.type[0].toUpperCase()+(b.purpose==='investment'?' inv':' trd'); },
+    openNew(){ this.ns={symbol:'',family:'',lot:null,current:null,high52:null,assignment_price:null,buckets:[{type:'equity',purpose:'investment',strategy:'S1',demat:'',qty:0,avg:null}]}; this.status=''; this.show=true; },
+    edit(r){ this.ns={symbol:r.symbol,family:r.family||'',lot:r.lot,current:r.current,high52:r.high52,assignment_price:r.assignment_price,buckets:JSON.parse(JSON.stringify(r.buckets||[]))}; this.status=''; this.show=true; },
+    async save(){
+      if(!(this.ns.symbol||'').trim()){ this.status='✗ underlying required'; return; }
+      this.status='saving…';
+      try{ const j=await fetch('/api/holdings/book',{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({client:this._saveClient(), ...this.ns})}).then(r=>r.json());
+        if(j.saved){ this.show=false; await this.load(); } else this.status='✗ '+(j.error||'failed'); }catch(e){ this.status='✗ '+e; }
+    },
+  };
+}
+</script>
+{% endblock %}

@@ -1,0 +1,19 @@
+# Capacitor Android wrapper — commit source, ignore installed/build artifacts
+node_modules/
+package-lock.json
+
+# Android build outputs & local config
+android/.gradle/
+android/build/
+android/app/build/
+android/capacitor-cordova-android-plugins/
+android/local.properties
+android/.idea/
+android/app/release/
+*.apk
+*.aab
+
+# Signing — NEVER commit the keystore or its passwords
+*.keystore
+*.jks
+keystore.properties

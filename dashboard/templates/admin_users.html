@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Users &amp; Access · Theta Quant{% endblock %}
+{% block content %}
+<div class="space-y-4" x-data="usersAdmin()" x-init="load()">
+
+  <div class="flex items-end justify-between gap-3 flex-wrap">
+    <div>
+      <h1 class="text-[21px] font-bold tracking-tight">Users &amp; Access</h1>
+      <div class="text-[12px] text-[var(--text-3)]">Give each person their own login, scoped by client, strategy, broker and demat.</div>
+    </div>
+    <button @click="openNew()" class="text-[12px] font-semibold text-white rounded-lg px-3.5 py-2" style="background:var(--blue)">+ User</button>
+  </div>
+
+  <!-- access model legend -->
+  <div class="card p-3 text-[11px] text-[var(--text-3)] leading-snug">
+    <b class="text-[var(--text-1)]">Roles:</b> Admin = full control + manage users · Editor = view + edit within scope · Viewer = view only.
+    <b class="text-[var(--text-1)]">Scope</b> "All" = every value; pick specific ones to restrict. Your own machine (loopback) is always admin — you can't lock yourself out.
+  </div>
+
+  <!-- user table -->
+  <div class="card p-0 overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="data-table">
+        <thead><tr><th>User</th><th>Role</th><th>Clients</th><th>Strategies</th><th>Brokers</th><th>Demats</th><th></th></tr></thead>
+        <tbody>
+          <template x-for="u in users" :key="u.username">
+            <tr>
+              <td class="font-semibold align-top"><span x-text="u.username"></span><div class="text-[10px] text-[var(--text-3)]" x-text="u.name && u.name!==u.username ? u.name : ''"></div></td>
+              <td class="align-top"><span class="pill text-[10px]" :class="roleClass(u.role)" x-text="u.role"></span></td>
+              <td class="align-top text-[11px]" x-text="scopeText(u.scopes.clients)"></td>
+              <td class="align-top text-[11px]" x-text="scopeText(u.scopes.strategies)"></td>
+              <td class="align-top text-[11px]" x-text="scopeText(u.scopes.brokers)"></td>
+              <td class="align-top text-[11px]" x-text="scopeText(u.scopes.demats)"></td>
+              <td class="text-right align-top whitespace-nowrap">
+                <button @click="edit(u)" class="text-[11px] text-[var(--text-3)] hover:text-[var(--text-1)] mr-2" title="Edit">✎</button>
+                <button @click="del(u)" class="text-[11px] text-loss-600" title="Delete">✕</button>
+              </td>
+            </tr>
+          </template>
+        </tbody>
+      </table>
+    </div>
+    <div x-show="!users.length" class="p-10 text-center text-[var(--text-3)] text-[13px]">No users yet. Click <b>+ User</b> to create the first scoped login.<br>Until you do, office-WiFi devices stay auto-admin.</div>
+  </div>
+
+  <!-- editor modal -->
+  <div x-show="show" x-cloak class="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-3" @click.self="show=false">
+    <div class="bg-[var(--surface)] rounded-2xl p-5 w-[95vw] max-w-[640px] max-h-[90vh] overflow-y-auto shadow-2xl">
+      <div class="font-bold text-[15px] mb-3" x-text="isEdit ? ('Edit '+f.username) : 'New user'"></div>
+
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-4 text-[12px]">
+        <label class="space-y-0.5"><span class="builder-head">Username</span><input x-model="f.username" :disabled="isEdit" placeholder="dealer1" class="num w-full border border-[var(--border)] rounded px-2 py-1 disabled:opacity-50"></label>
+        <label class="space-y-0.5"><span class="builder-head">Display name</span><input x-model="f.name" placeholder="optional" class="w-full border border-[var(--border)] rounded px-2 py-1"></label>
+        <label class="space-y-0.5"><span class="builder-head">Role</span>
+          <select x-model="f.role" class="w-full border border-[var(--border)] rounded px-2 py-1">
+            <template x-for="r in ref.roles" :key="r"><option :value="r" x-text="r"></option></template>
+          </select>
+        </label>
+        <label class="space-y-0.5"><span class="builder-head" x-text="isEdit?'New password (blank=keep)':'Password'"></span><input x-model="f.password" type="text" placeholder="set a password" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+      </div>
+
+      <!-- scope pickers -->
+      <template x-for="dim in dims" :key="dim.key">
+        <div class="mb-3">
+          <div class="flex items-center justify-between mb-1">
+            <span class="builder-head" x-text="dim.label"></span>
+            <label class="text-[11px] flex items-center gap-1.5 cursor-pointer"><input type="checkbox" :checked="isAll(dim.key)" @change="toggleAll(dim.key,$event.target.checked)"> All</label>
+          </div>
+          <div class="flex flex-wrap gap-1.5" :class="isAll(dim.key)?'opacity-40 pointer-events-none':''">
+            <template x-for="opt in dim.options" :key="opt.value">
+              <button type="button" @click="toggle(dim.key,opt.value)"
+                class="pill text-[11px] border"
+                :class="has(dim.key,opt.value)?'bg-accent-50 text-accent-700 border-[var(--blue)]':'border-[var(--border)] text-[var(--text-3)]'"
+                x-text="opt.label"></button>
+            </template>
+            <span x-show="!dim.options.length" class="text-[11px] text-[var(--text-3)]">none on record yet — leave as All</span>
+          </div>
+        </div>
+      </template>
+
+      <div class="flex justify-end gap-2 mt-4">
+        <button @click="show=false" class="btn">Cancel</button>
+        <button @click="save()" class="text-[12px] font-semibold text-white rounded-lg px-4 py-2" style="background:var(--blue)">Save user</button>
+      </div>
+      <div class="text-[11px] mt-2 text-right" :class="ok?'text-gain-600':'text-loss-600'" x-text="status"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+function usersAdmin(){
+  const RC={admin:'bg-warn-100 text-warn-700',editor:'bg-accent-50 text-accent-700',viewer:'bg-[var(--bg)] text-[var(--text-3)]'};
+  return {
+    users:[], ref:{roles:['admin','editor','viewer'],strategies:[],clients:[],brokers:[],demats:[]},
+    show:false, isEdit:false, ok:false, status:'',
+    f:{username:'',name:'',role:'viewer',password:'',scopes:{clients:['*'],strategies:['*'],brokers:['*'],demats:['*']}},
+    get dims(){ return [
+      {key:'clients',   label:'Clients',    options:this.ref.clients.map(c=>({value:c,label:c}))},
+      {key:'strategies',label:'Strategies', options:this.ref.strategies.map(s=>({value:s.key,label:s.label}))},
+      {key:'brokers',   label:'Brokers',    options:this.ref.brokers.map(b=>({value:b,label:b}))},
+      {key:'demats',    label:'Demats',     options:this.ref.demats.map(d=>({value:d,label:d}))},
+    ]; },
+    async load(){
+      try{ this.users=(await fetch('/api/admin/users').then(r=>r.json())).users||[]; }catch(e){}
+      try{ this.ref=await fetch('/api/admin/refdata').then(r=>r.json()); }catch(e){}
+    },
+    roleClass(r){ return RC[r]||RC.viewer; },
+    scopeText(l){ return (!l||l.includes('*'))?'All':l.join(', '); },
+    isAll(d){ const l=this.f.scopes[d]||['*']; return l.includes('*'); },
+    has(d,v){ const l=this.f.scopes[d]||[]; return !l.includes('*') && l.includes(v); },
+    toggleAll(d,on){ this.f.scopes[d]= on?['*']:[]; },
+    toggle(d,v){ let l=this.f.scopes[d]||[]; if(l.includes('*')) l=[];
+      l = l.includes(v) ? l.filter(x=>x!==v) : [...l,v];
+      this.f.scopes[d] = l.length?l:['*']; },
+    openNew(){ this.isEdit=false; this.ok=false; this.status='';
+      this.f={username:'',name:'',role:'viewer',password:'',scopes:{clients:['*'],strategies:['*'],brokers:['*'],demats:['*']}}; this.show=true; },
+    edit(u){ this.isEdit=true; this.ok=false; this.status='';
+      this.f={username:u.username,name:u.name||'',role:u.role,password:'',scopes:JSON.parse(JSON.stringify(u.scopes))}; this.show=true; },
+    async save(){
+      if(!this.f.username.trim()){ this.ok=false; this.status='✗ username required'; return; }
+      if(!this.isEdit && !this.f.password.trim()){ this.ok=false; this.status='✗ password required for a new user'; return; }
+      this.status='saving…'; this.ok=false;
+      try{ const j=await fetch('/api/admin/users',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(this.f)}).then(r=>r.json());
+        if(j.saved){ this.ok=true; this.status='✓ saved'; this.show=false; await this.load(); }
+        else this.status='✗ '+(j.error||'failed'); }catch(e){ this.status='✗ '+e; }
+    },
+    async del(u){ if(!confirm('Delete user '+u.username+'?')) return;
+      await fetch('/api/admin/users/'+encodeURIComponent(u.username),{method:'DELETE'}); await this.load(); },
+  };
+}
+</script>
+{% endblock %}

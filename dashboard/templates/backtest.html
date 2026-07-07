@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+{% block title %}Backtesting · Theta Quant{% endblock %}
+{% block content %}
+<div class="space-y-4" x-data="backtest()" x-init="load()">
+
+  <div class="flex items-end justify-between gap-3 flex-wrap">
+    <div>
+      <h1 class="text-xl font-bold tracking-tight">Backtesting</h1>
+      <div class="text-[12px] text-[var(--text-3)]">Every committed analysis and its headline finding — the research log behind the locked rules. <span x-show="d.count" class="num" x-text="d.count+' studies'"></span></div>
+    </div>
+    <div class="flex items-center gap-2">
+      <input x-model="q" placeholder="search findings…" class="text-[12px] border border-[var(--border)] rounded-lg px-3 py-1.5 w-48">
+      <div class="inline-flex rounded-lg border border-[var(--border)] overflow-hidden text-[11px] font-semibold">
+        <template x-for="f in [['all','All'],['analysis','Analyses'],['live','Live'],['decision','Decisions']]" :key="f[0]">
+          <button @click="kind=f[0]" class="px-2.5 py-1.5" :class="kind===f[0]?'bg-[var(--text-1)] text-[var(--surface)]':'text-[var(--text-3)]'" x-text="f[1]"></button>
+        </template>
+      </div>
+    </div>
+  </div>
+
+  <!-- LEARNING LOOP: actual fills scored vs the day's premium path -->
+  <div class="card p-4">
+    <div class="flex items-center justify-between mb-2">
+      <div class="text-[13px] font-bold">Fill-timing scorecard <span class="text-[11px] text-[var(--text-3)] font-normal">— your actual sells vs the day's peak premium</span></div>
+      <button @click="loadScored()" class="text-[11px] px-2 py-1 rounded-md border border-[var(--border)]">↻</button>
+    </div>
+    <template x-if="fs.summary && fs.summary.n_rated">
+      <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mb-3">
+        <div class="rounded-lg bg-[var(--bg)] p-3"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Avg premium captured</div>
+          <div class="num text-[20px] font-bold" :class="(fs.summary.avg_capture_pct||0)>=85?'text-gain-600':(fs.summary.avg_capture_pct||0)>=70?'text-warn-600':'text-loss-600'" x-text="(fs.summary.avg_capture_pct||0)+'%'"></div>
+          <div class="text-[10px] text-[var(--text-3)]">of the day's peak</div></div>
+        <div class="rounded-lg bg-[var(--bg)] p-3"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Sold too early</div>
+          <div class="num text-[20px] font-bold" x-text="(fs.summary.avg_mins_early>0?fs.summary.avg_mins_early:0)+' min'"></div>
+          <div class="text-[10px] text-[var(--text-3)]" x-text="(fs.summary.sold_early_pct||0)+'% of fills before the peak'"></div></div>
+        <div class="rounded-lg bg-[var(--bg)] p-3 col-span-2 sm:col-span-1"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Fills scored</div>
+          <div class="num text-[20px] font-bold" x-text="fs.summary.n_rated+' / '+fs.summary.n"></div>
+          <div class="text-[10px] text-[var(--text-3)]">index fills w/ minute data</div></div>
+      </div>
+    </template>
+    <div class="overflow-x-auto" x-show="(fs.scored||[]).length"><table class="data-table">
+      <thead><tr><th>Date</th><th>Sold @</th><th class="text-right">Your premium</th><th class="text-right">Day peak</th><th class="text-right">Captured</th><th>Timing</th></tr></thead>
+      <tbody>
+        <template x-for="(f,i) in (fs.scored||[])" :key="i"><tr>
+          <td class="num text-[11px]" x-text="f.date"></td>
+          <td class="num" x-text="f.time"></td>
+          <td class="num text-right" x-text="f.fill_premium!=null?('₹'+f.fill_premium):'—'"></td>
+          <td class="num text-right text-[var(--text-3)]" x-text="f.day_peak!=null?('₹'+f.day_peak+' @'+f.peak_time):'—'"></td>
+          <td class="num text-right font-semibold" :class="(f.capture_pct||0)>=85?'text-gain-600':(f.capture_pct||0)>=70?'text-warn-600':'text-loss-600'" x-text="f.capture_pct!=null?(f.capture_pct+'%'):(f.note||'—')"></td>
+          <td class="text-[11px]" x-show="f.mins_early!=null"><span :class="f.mins_early>0?'text-loss-600':'text-[var(--text-3)]'" x-text="f.mins_early>0?('sold '+f.mins_early+'m too early'):(f.mins_early<0?('after peak by '+(-f.mins_early)+'m'):'at the peak')"></span></td>
+        </tr></template>
+      </tbody>
+    </table></div>
+    <div x-show="!(fs.scored||[]).length" class="text-[12px] text-[var(--text-3)] py-3" x-text="fs.note||'No fills scored yet — they appear as you mark trades filled, then this shows how close to the peak you sold.'"></div>
+  </div>
+
+  <div class="text-[11px] text-[var(--text-3)] rounded-lg bg-[var(--bg)] p-2.5">
+    Read-only library from <b>FINDINGS_LOG.md</b>. Each analysis is a committed script in <span class="num">analyses/NNN_slug.py</span> → outputs stay local (not pushed). New backtests append here automatically. Future: run a backtest from the UI (the <b>Lab → Algo</b> roadmap).
+  </div>
+
+  <div class="space-y-2">
+    <template x-for="f in rows()" :key="f.date+f.id">
+      <div class="card p-3.5">
+        <div class="flex items-start gap-3">
+          <div class="shrink-0 text-center">
+            <div class="num text-[15px] font-bold" x-text="f.id"></div>
+            <span class="pill text-[8px] uppercase font-bold mt-0.5 inline-block"
+              :class="f.kind==='live'?'bg-gain-100 text-gain-700':f.kind==='decision'?'bg-accent-50 text-accent-700':'bg-[var(--bg)] text-[var(--text-3)]'" x-text="f.kind"></span>
+          </div>
+          <div class="min-w-0 flex-1">
+            <div class="text-[10px] num text-[var(--text-3)] mb-0.5" x-text="f.date"></div>
+            <div class="text-[12.5px] font-semibold" x-text="f.title"></div>
+            <div class="text-[12px] text-[var(--text-2)] mt-1 leading-snug" x-text="f.finding"></div>
+          </div>
+        </div>
+      </div>
+    </template>
+    <div x-show="!rows().length" class="card p-10 text-center text-[var(--text-3)] text-[13px]">No findings match.</div>
+  </div>
+</div>
+
+<script>
+function backtest(){
+  return {
+    d:{findings:[],count:0}, q:'', kind:'all', fs:{scored:[],summary:{}},
+    async load(){ try{ this.d=await fetch('/api/backtest/findings').then(r=>r.json()); }catch(e){} this.loadScored(); },
+    async loadScored(){ try{ this.fs=await fetch('/api/fills/scored').then(r=>r.json()); }catch(e){} },
+    rows(){ const q=this.q.toLowerCase().trim();
+      return (this.d.findings||[]).filter(f=>(this.kind==='all'||f.kind===this.kind) &&
+        (!q || (f.title+' '+f.finding+' '+f.id).toLowerCase().includes(q))); },
+  };
+}
+</script>
+{% endblock %}

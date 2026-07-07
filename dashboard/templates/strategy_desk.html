@@ -1,0 +1,546 @@
+{% extends "base.html" %}
+{% block title %}{{ title }} · Theta Quant{% endblock %}
+{% block content %}
+<div class="space-y-5" x-data="desk()" x-init="load()">
+ <div class="flex flex-wrap items-center justify-between gap-3">
+ <div>
+ <h1 class="text-xl font-bold tracking-tight">{{ title }}</h1>
+ <div class="text-[11px] text-[var(--text-3)]">{{ blurb }}</div>
+ </div>
+ <div class="flex gap-2 items-center">
+ {% if kind == 'covered_call' %}<button @click="showCalc=!showCalc" class="btn">Payoff calc</button>{% endif %}
+ <button @click="openNew()" class="btn-primary">+ New position</button>
+ <button @click="load()" class="btn-ghost" title="Refresh">↻</button>
+ </div>
+ </div>
+
+ <!-- Sensibull-style stat strip -->
+ <div class="stat-strip grid-cols-2 md:grid-cols-5 divide-x divide-y md:divide-y-0 divide-[var(--border)]">
+ <div><div class="lbl">Net P&L</div>
+ <div class="val" :class="(d.totals?.net??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(d.totals?.net)"></div></div>
+ <div><div class="lbl">Premium collected</div>
+ <div class="val text-gain-600" x-text="money(d.totals?.premium)"></div></div>
+ <div><div class="lbl">Max profit</div>
+ <div class="val text-gain-600" x-text="maxProfit()!=null?money(maxProfit()):'—'"></div></div>
+ <div><div class="lbl">Reward / Risk</div>
+ <div class="val" x-text="rewardRisk()"></div></div>
+ <div><div class="lbl">Open positions</div>
+ <div class="val" x-text="d.totals?.n ?? 0"></div></div>
+ </div>
+
+ <!-- covered-call payoff calculator -->
+ {% if kind == 'covered_call' %}
+ <div x-show="showCalc" x-cloak class="card p-4 space-y-2">
+ <div class="text-[12px] font-bold">Buy-write payoff <span class="font-normal text-[var(--text-3)]">({{ cc_mode }})</span></div>
+ <div class="grid grid-cols-2 md:grid-cols-6 gap-2 text-[12px]">
+ <input x-model.number.lazy="calc.spot" type="number" placeholder="Spot" class="num border border-[var(--border)] rounded px-2 py-1">
+ <input x-model.number.lazy="calc.fut_entry" type="number" placeholder="Future buy" class="num border border-[var(--border)] rounded px-2 py-1">
+ <input x-model.number.lazy="calc.strike" type="number" placeholder="Call strike" class="num border border-[var(--border)] rounded px-2 py-1">
+ <input x-model.number.lazy="calc.premium" type="number" step="0.05" placeholder="Premium" class="num border border-[var(--border)] rounded px-2 py-1">
+ <input x-model.number.lazy="calc.lots" type="number" placeholder="Lots" class="num border border-[var(--border)] rounded px-2 py-1">
+ <input x-model.number.lazy="calc.lot_size" type="number" placeholder="Lot size" class="num border border-[var(--border)] rounded px-2 py-1">
+ </div>
+ <button @click="runCalc()" class="btn-primary !py-1.5">Compute</button>
+ <div x-show="payoff" class="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
+ <!-- stat tiles -->
+ <div class="md:col-span-2 grid grid-cols-2 md:grid-cols-4 gap-3 text-[12px] num">
+ <div class="kpi-tile !p-3"><div class="lbl">Max profit</div><div class="val !text-[16px] text-gain-600" x-text="money(payoff?.max_profit)"></div></div>
+ <div class="kpi-tile !p-3"><div class="lbl">Breakeven</div><div class="val !text-[16px]" x-text="payoff?.breakeven"></div></div>
+ <div class="kpi-tile !p-3"><div class="lbl">Premium income</div><div class="val !text-[16px] text-gain-600" x-text="money(payoff?.premium_income)"></div></div>
+ <div class="kpi-tile !p-3"><div class="lbl">P&L at spot now</div><div class="val !text-[16px]" :class="(payoff?.current_pnl??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(payoff?.current_pnl)"></div></div>
+ </div>
+ <!-- inline payoff sketch (capped-upside buy-write profile) -->
+ <div class="kpi-tile !p-3">
+ <div class="lbl mb-1">Payoff sketch</div>
+ <svg viewBox="0 0 200 70" class="w-full h-[64px]" preserveAspectRatio="none">
+ <line x1="0" y1="50" x2="200" y2="50" stroke="var(--border)" stroke-width="1"/>
+ <!-- rising then capped (covered call) -->
+ <polyline points="0,68 95,18 200,18" fill="none" stroke="#10b981" stroke-width="2.5" stroke-linejoin="round"/>
+ <line x1="95" y1="6" x2="95" y2="64" stroke="var(--text-3)" stroke-width="1" stroke-dasharray="2 3"/>
+ </svg>
+ <div class="flex justify-between text-[9px] text-[var(--text-3)]"><span>loss</span><span>strike (cap)</span></div>
+ </div>
+ </div>
+ </div>
+ {% endif %}
+
+ <!-- Standard desk: TWO sections — Strategy (selling plan) | Monitoring (live + RGB) -->
+ <div class="flex items-center justify-between gap-3 flex-wrap">
+ <div class="seg">
+ <button class="seg-btn" :class="tab==='strategy'&&'on'" @click="tab='strategy'; planLevels()">Plan</button>
+ <button class="seg-btn" :class="tab==='monitoring'&&'on'" @click="tab='monitoring'; buildAnalyse()">Monitor</button>
+ <button class="seg-btn" :class="tab==='report'&&'on'" @click="tab='report'">Report</button>
+ </div>
+ <div x-show="tab==='monitoring'" class="text-[11px] text-[var(--text-3)] flex items-center gap-2">
+ <span>Payoff anchor</span>
+ <input x-model.number.lazy="an.spot" @change="buildAnalyse()" type="number"
+ class="num w-28 border border-[var(--border)] rounded px-2 py-1 text-[12px]" placeholder="spot">
+ </div>
+ </div>
+
+ <!-- ===== STRATEGY TAB — selling plan: suggested strikes + targets ===== -->
+ <div x-show="tab==='strategy'" x-cloak class="space-y-4">
+ <div class="card p-4 space-y-3">
+ <div class="text-[13px] font-bold">Selling plan <span class="font-normal text-[var(--text-3)]">· suggested strikes & targets ({{ sub }})</span></div>
+ <div class="grid grid-cols-2 md:grid-cols-6 gap-2 text-[12px]">
+ <label class="space-y-0.5"><span class="builder-head">Spot</span><input x-model.number="sp.spot" @input="planLevels()" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+ <label class="space-y-0.5"><span class="builder-head">Target % OTM</span><input x-model.number="sp.otm" @input="planLevels()" type="number" step="0.25" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+ <label class="space-y-0.5"><span class="builder-head">Strike step</span><input x-model.number="sp.step" @input="planLevels()" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+ <label class="space-y-0.5"><span class="builder-head">Lot size</span><input x-model.number="sp.lot" @input="planLevels()" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+ <label class="space-y-0.5"><span class="builder-head">Lots</span><input x-model.number="sp.lots" @input="planLevels()" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+ <label class="space-y-0.5"><span class="builder-head">Margin/lot ₹</span><input x-model.number="sp.marginLot" @input="planLevels()" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+ </div>
+ <!-- suggested strikes -->
+ <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+ <div class="kpi-tile !p-3"><div class="lbl">PE (put) sell strike</div>
+ <div class="val !text-[18px] text-loss-600" x-text="sp.pe||'—'"></div>
+ <div class="text-[11px] text-[var(--text-3)]" x-show="sp.pe" x-text="sp.otm+'% below spot'"></div></div>
+ <div class="kpi-tile !p-3"><div class="lbl">CE (call) sell strike</div>
+ <div class="val !text-[18px] text-gain-600" x-text="sp.ce||'—'"></div>
+ <div class="text-[11px] text-[var(--text-3)]" x-show="sp.ce" x-text="sp.otm+'% above spot'"></div></div>
+ </div>
+ <!-- targets: item-wise (qty/margin) -->
+ <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold pt-1">Item-wise target</div>
+ <div class="grid grid-cols-2 md:grid-cols-3 gap-3 text-[12px] num">
+ <div class="kpi-tile !p-3"><div class="lbl">Qty to deploy</div><div class="val !text-[15px]" x-text="sp.qty?sp.qty.toLocaleString('en-IN'):'—'"></div><div class="text-[10px] text-[var(--text-3)]" x-text="(sp.lots||0)+' lots × '+(sp.lot||0)"></div></div>
+ <div class="kpi-tile !p-3"><div class="lbl">Margin needed</div><div class="val !text-[15px]" x-text="sp.margin?money(sp.margin):'—'"></div></div>
+ <div class="kpi-tile !p-3"><div class="lbl">Capital (₹Cr)</div><div class="val !text-[15px]" x-text="sp.margin?(sp.margin/1e7).toFixed(2):'—'"></div></div>
+ </div>
+ <!-- targets: return-wise -->
+ <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold pt-1">Return-wise target</div>
+ <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-[12px] items-end">
+ <label class="space-y-0.5"><span class="builder-head">Target yield ₹/Cr</span><input x-model.number="sp.targetYield" @input="planLevels()" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+ <div class="kpi-tile !p-3"><div class="lbl">Combined premium needed</div><div class="val !text-[15px]" x-text="sp.premNeeded!=null?('₹'+sp.premNeeded.toFixed(2)):'—'"></div><div class="text-[10px] text-[var(--text-3)]">per unit, both legs, to hit target/Cr</div></div>
+ <div class="kpi-tile !p-3"><div class="lbl">Premium income @ that</div><div class="val !text-[15px] text-gain-600" x-text="sp.premIncome!=null?money(sp.premIncome):'—'"></div></div>
+ </div>
+ <button @click="planToNew()" class="btn-primary !py-1.5">Use these strikes → New position</button>
+ </div>
+ <div class="text-[10px] text-[var(--text-3)]">Selling plan is a sizing/level calculator — strikes round to your strike step, margin ≈ lots × margin/lot. Enter a live combined premium target to back out the yield. For covered-calls-against-investment, the holdings-based plan lives on the <a href="/cc/investment" class="underline">Against Investment</a> desk.</div>
+ </div>
+
+ <!-- ===== MONITORING TAB — live positions + RGB + payoff ===== -->
+ <!-- filter bar (date/period + status/broker/demat + sort) -->
+ <div x-show="tab==='monitoring'" class="mb-3">{% include '_period_filter.html' %}</div>
+ <!-- live positions -->
+ <div x-show="tab==='monitoring'" class="card p-0 overflow-x-auto">
+ <table class="data-table">
+ <thead><tr><th>Name</th><th>Instrument</th><th>Legs</th><th>Broker</th><th>Demat</th><th>Entry</th><th class="text-right">Premium</th><th class="text-right">P&L</th><th>Status</th></tr></thead>
+ <tbody>
+ <template x-for="(p,i) in fpos" :key="p.id">
+ <tr class="cursor-pointer hover:bg-[var(--bg)]" @click="expand = expand===p.id ? null : p.id">
+ <td class="font-semibold" x-text="p.strategy_name || (p.instrument+' '+(p.tier||''))"></td>
+ <td class="num" x-text="p.instrument"></td>
+ <td class="num text-[11px]" x-text="(p.legs||[]).filter(l=>(l.qty||0)!==0).map(l=>l.strike+l.side).join(' ')"></td>
+ <td x-text="p.broker"></td><td x-text="p.demat"></td>
+ <td class="num text-[11px]" x-text="p.entry_date"></td>
+ <td class="num text-right text-gain-600" x-text="money(p.premium_collected)"></td>
+ <td class="num text-right font-bold" :class="(p.total_pnl??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(p.total_pnl)"></td>
+ <td><span class="pill" :class="p.status==='open'?'bg-gain-100 text-gain-700':'bg-[var(--bg)] text-[var(--text-3)]'" x-text="p.status"></span></td>
+ </tr>
+ </template>
+ </tbody>
+ <tfoot x-show="(d.positions||[]).length">
+ <tr class="total">
+ <td>Total</td>
+ <td colspan="5" class="text-[11px] text-[var(--text-3)] font-normal" x-text="(d.positions||[]).length+' positions · '+(d.totals?.n??0)+' open'"></td>
+ <td class="num text-right text-gain-600" x-text="money(d.totals?.premium)"></td>
+ <td class="num text-right" :class="(d.totals?.net??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(d.totals?.net)"></td>
+ <td></td>
+ </tr>
+ </tfoot>
+ </table>
+ <div x-show="!(d.positions||[]).length" class="p-10 text-center text-[var(--text-3)] text-[13px]">No positions yet. Click <b>+ New position</b>.</div>
+ </div>
+
+ <!-- payoff / analyse (Sensibull-style) — part of monitoring -->
+ <div x-show="tab==='monitoring'" x-cloak class="space-y-4">
+
+ <!-- metric tile row -->
+ <div class="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
+ <div class="kpi-tile !p-3"><div class="lbl">Max profit</div>
+ <div class="val !text-[16px] text-gain-600" x-text="an.maxProfit!=null?money(an.maxProfit):'—'"></div></div>
+ <div class="kpi-tile !p-3"><div class="lbl">Max loss</div>
+ <div class="val !text-[16px] text-loss-600" x-text="an.maxLoss!=null?money(an.maxLoss):'—'"></div></div>
+ <div class="kpi-tile !p-3"><div class="lbl">Breakeven<span x-show="(an.breakevens||[]).length>1">s</span></div>
+ <div class="val !text-[16px]" x-text="(an.breakevens||[]).length?an.breakevens.map(b=>b.toLocaleString('en-IN')).join(' / '):'—'"></div></div>
+ <div class="kpi-tile !p-3"><div class="lbl">Reward / Risk</div>
+ <div class="val !text-[16px]" x-text="an.rr!=null?an.rr.toFixed(2)+'×':'—'"></div></div>
+ <div class="kpi-tile !p-3"><div class="lbl">POP <span class="lowercase font-normal">(est.)</span></div>
+ <div class="val !text-[16px]" x-text="an.pop!=null?an.pop.toFixed(0)+'%':'—'"></div></div>
+ <div class="kpi-tile !p-3"><div class="lbl">Premium</div>
+ <div class="val !text-[16px] text-gain-600" x-text="money(an.premium)"></div></div>
+ <div class="kpi-tile !p-3"><div class="lbl">Margin <span class="lowercase font-normal">(live)</span></div>
+ <div class="val !text-[16px]" x-text="an.margin!=null?money(an.margin):'—'"></div></div>
+ </div>
+
+ <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+ <!-- payoff curve -->
+ <div class="card p-4 lg:col-span-2">
+ <div class="flex items-center justify-between mb-2">
+ <div class="text-[12px] font-bold">Payoff at expiry
+ <span class="font-normal text-[var(--text-3)]" x-text="'· '+(an.legCount||0)+' leg'+((an.legCount||0)===1?'':'s')+(an.usingEntry?' · entry profile (closed)':'')"></span>
+ </div>
+ <div class="flex items-center gap-3 text-[10px] text-[var(--text-3)]">
+ <span class="inline-flex items-center gap-1"><span class="inline-block w-3 h-[2px] bg-[var(--text-3)]" style="border-top:1px dashed var(--text-3)"></span>spot</span>
+ <span class="inline-flex items-center gap-1"><span class="inline-block w-2 h-2 rounded-full" style="background:var(--accent-600,#4f46e5)"></span>breakeven</span>
+ </div>
+ </div>
+ <div x-show="!an.curve || !an.curve.length" class="h-[220px] flex items-center justify-center text-[12px] text-[var(--text-3)]">
+ No open legs to plot. Enter an underlying anchor or open a position.
+ </div>
+ <svg x-show="an.curve && an.curve.length" viewBox="0 0 600 240" class="w-full h-[220px]" preserveAspectRatio="none"
+ @mousemove="hoverSvg($event)" @mouseleave="an.hover=null">
+ <!-- zero line -->
+ <line :x1="0" :x2="600" :y1="an.zeroY" :y2="an.zeroY" stroke="var(--border)" stroke-width="1"/>
+ <!-- profit / loss fill -->
+ <polygon :points="an.fillProfit" fill="#10b981" opacity="0.10"/>
+ <polygon :points="an.fillLoss" fill="#ef4444" opacity="0.10"/>
+ <!-- the curve -->
+ <polyline :points="an.poly" fill="none" stroke="var(--text-1)" stroke-width="2" stroke-linejoin="round"/>
+ <!-- spot marker -->
+ <line :x1="an.spotX" :x2="an.spotX" y1="6" y2="234" stroke="var(--text-3)" stroke-width="1" stroke-dasharray="3 3"/>
+ <!-- breakeven markers -->
+ <template x-for="bx in an.beX" :key="bx">
+ <circle :cx="bx" :cy="an.zeroY" r="3.5" fill="var(--accent-600,#4f46e5)"/>
+ </template>
+ <!-- hover crosshair -->
+ <template x-if="an.hover">
+ <g>
+ <line :x1="an.hover.x" :x2="an.hover.x" y1="6" y2="234" stroke="var(--text-3)" stroke-width="0.75"/>
+ <circle :cx="an.hover.x" :cy="an.hover.y" r="3" fill="var(--text-1)"/>
+ </g>
+ </template>
+ </svg>
+ <!-- hover readout + axis -->
+ <div class="flex items-center justify-between text-[11px] num mt-1">
+ <span class="text-[var(--text-3)]" x-text="an.xmin!=null?an.xmin.toLocaleString('en-IN'):''"></span>
+ <span x-show="an.hover" class="font-semibold">
+ <span x-text="an.hover?.u?.toLocaleString('en-IN')"></span> →
+ <span :class="(an.hover?.pnl??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(an.hover?.pnl)"></span>
+ </span>
+ <span class="text-[var(--text-3)]" x-text="an.xmax!=null?an.xmax.toLocaleString('en-IN'):''"></span>
+ </div>
+ </div>
+
+ <!-- P&L table -->
+ <div class="card p-0 overflow-hidden">
+ <div class="px-4 py-2.5 border-b border-[var(--border)] text-[12px] font-bold">P&amp;L table</div>
+ <div class="overflow-y-auto" style="max-height:260px">
+ <table class="data-table">
+ <thead><tr><th>Underlying</th><th class="text-right">Move</th><th class="text-right">P&amp;L</th></tr></thead>
+ <tbody>
+ <template x-for="(r,i) in an.table||[]" :key="i">
+ <tr :class="r.atSpot && 'total'">
+ <td class="num" x-text="r.u.toLocaleString('en-IN')"></td>
+ <td class="num text-right text-[var(--text-3)]" x-text="(r.pct>=0?'+':'')+r.pct.toFixed(1)+'%'"></td>
+ <td class="num text-right font-semibold" :class="(r.pnl??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(r.pnl)"></td>
+ </tr>
+ </template>
+ </tbody>
+ </table>
+ <div x-show="!(an.table||[]).length" class="p-8 text-center text-[var(--text-3)] text-[12px]">—</div>
+ </div>
+ </div>
+ </div>
+ <div class="text-[10px] text-[var(--text-3)]">
+ POP est. = share of the ±8% underlying grid that lands in profit at expiry (uniform, not IV-weighted) — directional gauge, not a Black-Scholes probability.
+ Payoff uses open legs (qty≠0); for fully-closed positions it shows the original entry profile from booked legs.
+ </div>
+ </div>
+
+ {% if s_code %}
+ <!-- Live monitoring (from the master Excel {{ s_code }} sheet) -->
+ <div x-show="tab==='monitoring'" class="card p-0">
+ <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--border)]">
+ <div class="text-[13px] font-bold">Monitoring <span class="font-normal text-[var(--text-3)]">· {{ s_code }} sheet · sold premium vs live</span></div>
+ <div class="flex items-center gap-2 text-[11px]">
+ <span class="pill bg-loss-100 text-loss-700" x-text="'RED '+(mon.summary?.red??0)"></span>
+ <span class="pill bg-warn-100 text-warn-700" x-text="'ORANGE '+(mon.summary?.orange??0)"></span>
+ <span class="pill bg-gain-100 text-gain-700" x-text="'OK '+(mon.summary?.green??0)"></span>
+ <span class="text-[var(--text-3)]" x-text="mon.computed_at?('@ '+mon.computed_at):''"></span>
+ <button @click="loadMon()" class="btn-ghost !py-0.5" title="Refresh">↻</button>
+ </div>
+ </div>
+ <div x-show="!(mon.underlyings||[]).length" class="p-8 text-center text-[var(--text-3)] text-[13px]">No sold {{ s_code }} positions in the sheet.</div>
+ <template x-for="u in mon.underlyings||[]" :key="u.underlying">
+ <div class="border-b border-[var(--border)]">
+ <div class="flex items-center justify-between px-4 py-2 cursor-pointer hover:bg-[var(--bg)]" @click="monX = monX===u.underlying?null:u.underlying">
+ <div class="flex items-center gap-2">
+ <span class="w-2.5 h-2.5 rounded-full" :class="u.worst==='RED'?'bg-loss-500':(u.worst==='ORANGE'?'bg-warn-500':'bg-gain-500')"></span>
+ <span class="font-semibold text-[13px]" x-text="u.underlying"></span>
+ <span class="text-[11px] text-[var(--text-3)]" x-text="'spot '+(u.spot!=null?u.spot.toLocaleString('en-IN'):'—')+' · '+(u.legs||[]).length+' sold'"></span>
+ </div>
+ <span class="text-[var(--text-3)] text-[11px]" x-text="monX===u.underlying?'▲':'▼'"></span>
+ </div>
+ <div x-show="monX===u.underlying" class="px-4 pb-3 overflow-x-auto">
+ <table class="data-table"><thead><tr><th>Strike</th><th>Side</th><th class="text-right">Qty</th><th class="text-right">Sold ₹</th><th class="text-right">Now ₹</th><th class="text-right">Captured</th><th>Signal</th><th>Demat</th></tr></thead>
+ <tbody><template x-for="(l,li) in u.legs" :key="li"><tr>
+ <td class="num" x-text="l.strike"></td><td x-text="l.side"></td>
+ <td class="num text-right" x-text="(l.qty||0).toLocaleString('en-IN')"></td>
+ <td class="num text-right" x-text="l.sold_premium ?? '—'"></td>
+ <td class="num text-right" x-text="l.current_premium ?? '—'"></td>
+ <td class="num text-right" x-text="l.captured_pct!=null?(l.captured_pct.toFixed(0)+'%'):'—'"></td>
+ <td><span class="pill" :class="l.level==='RED'?'bg-loss-100 text-loss-700':(l.level==='ORANGE'?'bg-warn-100 text-warn-700':'bg-gain-100 text-gain-700')" x-text="(l.profit_take?'TAKE PROFIT · ':'')+(l.reason||l.level)"></span></td>
+ <td x-text="l.demat||''"></td></tr></template></tbody></table>
+ </div>
+ </div>
+ </template>
+ </div>
+ {% endif %}
+
+ <!-- expanded legs -->
+ <template x-for="p in (d.positions||[]).filter(p=>p.id===expand)" :key="'x'+p.id">
+ <div class="card p-4">
+ <div class="text-[12px] font-bold mb-2" x-text="'Legs · ' + (p.strategy_name||p.instrument)"></div>
+ <table class="data-table"><thead><tr><th>Leg</th><th class="text-right">Qty</th><th class="text-right">Price</th><th class="text-right">LTP</th><th class="text-right">P&L</th><th>Demat</th></tr></thead>
+ <tbody><template x-for="(l,li) in p.legs" :key="li"><tr>
+ <td class="num"><span x-text="l.strike"></span> <span x-text="l.side||l.leg_type"></span></td>
+ <td class="num text-right" x-text="(l.qty||0).toLocaleString('en-IN')"></td>
+ <td class="num text-right" x-text="l.price ?? '—'"></td>
+ <td class="num text-right" x-text="l.ltp ?? '—'"></td>
+ <td class="num text-right" :class="(l.pnl??0)>=0?'text-gain-600':'text-loss-600'" x-text="l.pnl!=null?money(l.pnl):'—'"></td>
+ <td x-text="l.demat||''"></td></tr></template></tbody></table>
+ </div>
+ </template>
+
+ <!-- ===== REPORT TAB — P&L by expiry month + open/closed split ===== -->
+ <div x-show="tab==='report'" class="space-y-3">
+ <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+ <div class="card p-3"><div class="lbl">Net P&L</div><div class="val !text-[18px]" :class="(repTot.net??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(repTot.net)"></div></div>
+ <div class="card p-3"><div class="lbl">Booked</div><div class="val !text-[18px]" :class="(repTot.booked??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(repTot.booked)"></div></div>
+ <div class="card p-3"><div class="lbl">Open MTM</div><div class="val !text-[18px]" :class="(repTot.unbooked??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(repTot.unbooked)"></div></div>
+ <div class="card p-3"><div class="lbl">Premium collected</div><div class="val !text-[18px] text-gain-600" x-text="money(repTot.premium)"></div></div>
+ </div>
+ <div class="card p-0 overflow-hidden">
+ <div class="px-4 py-2.5 border-b border-[var(--border)] text-[12.5px] font-semibold">P&L by expiry month</div>
+ <div class="overflow-x-auto"><table class="data-table">
+ <thead><tr><th>Expiry</th><th class="text-right">Positions</th><th class="text-right">Premium</th><th class="text-right">Booked</th><th class="text-right">Open MTM</th><th class="text-right">Net P&L</th></tr></thead>
+ <tbody>
+ <template x-for="r in reportByExpiry()" :key="r.month">
+ <tr>
+ <td class="font-semibold" x-text="r.label"></td>
+ <td class="num text-right" x-text="r.n"></td>
+ <td class="num text-right text-gain-600" x-text="money(r.premium)"></td>
+ <td class="num text-right" :class="(r.booked??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(r.booked)"></td>
+ <td class="num text-right" :class="(r.unbooked??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(r.unbooked)"></td>
+ <td class="num text-right font-bold" :class="(r.net??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(r.net)"></td>
+ </tr>
+ </template>
+ </tbody>
+ </table></div>
+ <div x-show="!reportByExpiry().length" class="p-8 text-center text-[var(--text-3)] text-[12px]">No positions for this strategy yet.</div>
+ <div class="text-[10px] text-[var(--text-3)] px-4 py-2">Same numbers feed <a href="/report-full" class="underline">Full Reporting</a> — this is just this strategy, bucketed by the expiry the contract belongs to.</div>
+ </div>
+ </div>
+
+ <!-- New position modal -->
+ <div x-show="showNew" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/40" @click.self="showNew=false">
+ <div class="bg-[var(--surface)] rounded-xl p-6 w-[720px] max-h-[85vh] overflow-y-auto shadow-2xl">
+ <div class="font-bold text-[15px] mb-3">New {{ title }} position</div>
+ <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+ <input x-model="ns.strategy_name" placeholder="Position name" class="col-span-2 text-[12px] border border-[var(--border)] rounded px-2 py-1.5">
+ <input x-model="ns.instrument" placeholder="{{ 'Index' if kind != 'covered_call' else 'Stock symbol' }}" class="text-[12px] border border-[var(--border)] rounded px-2 py-1.5">
+ <input x-model="ns.broker" placeholder="Broker" class="text-[12px] border border-[var(--border)] rounded px-2 py-1.5">
+ </div>
+ <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold mb-1.5">Legs</div>
+ <!-- Sensibull leg-builder: labelled column header -->
+ <div class="row-builder grid-cols-7 mb-1 px-0.5 hidden md:grid">
+ <span class="builder-head">Type</span><span class="builder-head">Strike</span>
+ <span class="builder-head">Qty (−short)</span><span class="builder-head">Price</span>
+ <span class="builder-head">Demat</span><span class="builder-head">Underlying</span><span></span>
+ </div>
+ <template x-for="(l,i) in ns.legs" :key="i">
+ <div class="row-builder grid-cols-7 mb-1">
+ <select x-model="l.leg_type" :class="(l.qty||0)<0?'!border-loss-500':((l.qty||0)>0?'!border-gain-500':'')"><option>CE</option><option>PE</option><option>FUT</option><option>EQ</option></select>
+ <input x-model.number.lazy="l.strike" type="number" placeholder="Strike" class="num">
+ <input x-model.number.lazy="l.qty" type="number" placeholder="Qty (−short)" class="num">
+ <input x-model.number.lazy="l.price" type="number" step="0.05" placeholder="Price" class="num">
+ <input x-model="l.demat" placeholder="Demat">
+ <input x-model="l.underlying" placeholder="Underlying">
+ <button @click="ns.legs.splice(i,1)" class="text-[12px] text-loss-600 justify-self-center" title="Remove leg">✕</button>
+ </div>
+ </template>
+ <button @click="ns.legs.push({leg_type:'CE',strike:0,qty:0,price:0,demat:'',underlying:ns.instrument})" class="btn !py-1 !px-3 mb-3 mt-0.5">+ leg</button>
+ <div class="flex justify-end gap-2">
+ <button @click="showNew=false" class="btn">Cancel</button>
+ <button @click="saveNew()" class="btn-primary">Create</button>
+ </div>
+ <div class="text-[11px] mt-2 text-right" x-text="nsStatus"></div>
+ </div>
+ </div>
+ <div class="text-[10px] text-[var(--text-3)]">Positions feed the unified <a href="/report-full" class="underline">Full Reporting</a> and bank reco. Same journal as every other desk.</div>
+</div>
+
+<script>
+function desk() {
+ return {
+ ...tgPeriod(),
+ get filterRows(){ return this.d.positions||[]; },
+ get fpos(){ return this.applyFilters(this.d.positions||[], 'entry_date'); },
+ get filteredCount(){ const n=this.fpos.length, t=(this.d.positions||[]).length; return n+(n!==t?(' of '+t):'')+' shown'; },
+ GROUP: "{{ group }}", SUB: "{{ sub }}", KIND: "{{ kind }}", CC_MODE: "{{ cc_mode }}", SCODE: "{{ s_code }}",
+ d: {}, expand: null, showNew: false, showCalc: false, nsStatus: '',
+ mon: {}, monX: null,
+ tab: 'strategy', an: { spot: null },
+ // selling-plan defaults per desk group (target %OTM / strike step / lot)
+ sp: { spot:0, otm:{{ default_otm|default(2.0) }}, step:{{ default_step|default(100) }}, lot:{{ default_lot|default(75) }}, lots:10, marginLot:150000, targetYield:8000, qty:0, margin:0, pe:0, ce:0, premNeeded:null, premIncome:null },
+ payoff: null, calc: { spot:0, fut_entry:0, strike:0, premium:0, lots:1, lot_size:1 },
+ ns: { strategy_name:'', instrument:'', broker:'', legs:[] },
+ async load(){ try { this.d = await fetch('/api/desk/positions?group='+encodeURIComponent(this.GROUP)).then(r=>r.json()); } catch(e){} if(this.SCODE) this.loadMon(); this.planLevels(); },
+ // ---- Selling plan: suggested strikes + item/return-wise targets (client-side) ----
+ round(v, step){ return step>0 ? Math.round(v/step)*step : Math.round(v); },
+ planLevels(){
+ const s=this.sp; const spot=+s.spot||0;
+ if(spot>0){ s.pe=this.round(spot*(1-(+s.otm||0)/100), +s.step); s.ce=this.round(spot*(1+(+s.otm||0)/100), +s.step); }
+ else { s.pe=0; s.ce=0; }
+ s.qty=(+s.lots||0)*(+s.lot||0);
+ s.margin=(+s.lots||0)*(+s.marginLot||0);
+ // return-wise: combined premium (per unit, both legs) needed to hit target ₹/Cr
+ // yield/Cr = premium_per_unit × qty / (margin/1e7). Solve premium for target.
+ if(s.margin>0 && s.qty>0 && (+s.targetYield)>0){
+ const cr=s.margin/1e7;
+ s.premNeeded = (+s.targetYield)*cr / s.qty; // ₹ per unit (both legs combined)
+ s.premIncome = s.premNeeded * s.qty; // total ₹ premium
+ } else { s.premNeeded=null; s.premIncome=null; }
+ },
+ planToNew(){
+ const s=this.sp;
+ this.ns = { strategy_name:'', instrument:'', broker:'',
+ legs:[ {leg_type:'PE',strike:s.pe||0,qty:-(s.qty||0),price:0,demat:'',underlying:''},
+ {leg_type:'CE',strike:s.ce||0,qty:-(s.qty||0),price:0,demat:'',underlying:''} ] };
+ this.showNew=true; this.nsStatus='';
+ },
+ async loadMon0(){},
+ async loadMon(){ if(!this.SCODE) return; try { this.mon = await fetch('/api/cc/monitor?s_code='+this.SCODE).then(r=>r.json()); } catch(e){} },
+ money(v){ if(v==null) return '—'; const s=v<0?'−':'+'; const a=Math.abs(v); if(a>=1e7) return s+'₹'+(a/1e7).toFixed(2)+'Cr'; if(a>=1e5) return s+'₹'+(a/1e5).toFixed(2)+'L'; return s+'₹'+Math.round(a).toLocaleString('en-IN'); },
+ maxProfit(){ const t=this.d.totals||{}; return t.max_profit!=null?t.max_profit:(t.premium!=null?t.premium:null); },
+ reportByExpiry(){ const m={};
+   (this.d.positions||[]).forEach(p=>{ const k=p.expiry_month||'?'; const r=m[k]||(m[k]={month:k,label:p.expiry||k,n:0,premium:0,booked:0,unbooked:0,net:0});
+     r.n++; r.premium+=p.premium_collected||0; r.booked+=p.booked_pnl||0; r.unbooked+=p.unbooked_pnl||0; r.net+=p.total_pnl||0; });
+   return Object.values(m).sort((a,b)=>a.month<b.month?1:-1); },
+ get repTot(){ return this.reportByExpiry().reduce((a,r)=>({premium:a.premium+r.premium,booked:a.booked+r.booked,unbooked:a.unbooked+r.unbooked,net:a.net+r.net}),{premium:0,booked:0,unbooked:0,net:0}); },
+ rewardRisk(){ const t=this.d.totals||{}; const r=this.maxProfit(); const risk=t.max_loss!=null?Math.abs(t.max_loss):null; if(r==null||!risk) return '—'; return (r/risk).toFixed(2)+'×'; },
+ openNew(){ this.showNew=true; this.nsStatus=''; if(!this.ns.legs.length){ this.ns.legs = {{ default_legs|tojson }}.map(t=>({leg_type:t,strike:0,qty:0,price:0,demat:'',underlying:''})); } },
+ async saveNew(){
+ const legs = this.ns.legs.filter(l=>l.qty||l.strike).map(l=>({strike:l.strike||0, side:(l.leg_type==='FUT'||l.leg_type==='EQ')?l.leg_type:l.leg_type, leg_type:l.leg_type, qty:l.qty||0, price:l.price||0, demat:l.demat||'', underlying:l.underlying||this.ns.instrument}));
+ if(!legs.length){ this.nsStatus='✗ add a leg'; return; }
+ this.nsStatus='saving…';
+ try {
+ const j = await fetch('/api/journal/trade',{method:'POST',headers:{'Content-Type':'application/json'},
+ body: JSON.stringify({ instrument:(this.ns.instrument||'NIFTY'), tier:this.SUB, strategy_group:this.GROUP,
+ strategy_name:this.ns.strategy_name, broker:this.ns.broker, source:'desk', legs })}).then(r=>r.json());
+ if(j.saved){ this.showNew=false; this.ns={strategy_name:'',instrument:'',broker:'',legs:[]}; await this.load(); }
+ else this.nsStatus='✗ '+(j.error||'failed');
+ } catch(e){ this.nsStatus='✗ '+e; }
+ },
+ async runCalc(){
+ const c=this.calc;
+ const qs=new URLSearchParams({fut_entry:c.fut_entry,strike:c.strike,premium:c.premium,spot:c.spot,lots:c.lots,lot_size:c.lot_size,mode:this.CC_MODE});
+ try { this.payoff = await fetch('/api/covered-call/payoff?'+qs).then(r=>r.json()); } catch(e){}
+ },
+
+ // ===== ANALYSE: client-side payoff from open legs of d.positions =====
+ // Collect every leg across open positions. qty is in UNITS (e.g. 180050),
+ // negative = short. price = per-unit entry. CE/PE = options; FUT/EQ = linear.
+ analyseLegs(){
+ const legs = []; let anchor = null, usingEntry = false;
+ for(const p of (this.d.positions||[])){
+ let open = (p.legs||[]).filter(l => (l.qty||0) !== 0);
+ // fully-closed position → reconstruct original entry profile from booked legs
+ if(!open.length && (p.booked_legs||[]).length){
+ usingEntry = true;
+ open = (p.booked_legs||[]).map(b => {
+ const opt = (b.side==='CE'||b.side==='PE');
+ // entry was short for sold options, long for FUT/EQ
+ const sign = opt ? -1 : 1;
+ return { strike:b.strike, side:b.side, leg_type:b.side,
+ qty: sign*Math.abs(b.qty||0), price: b.entry_price ?? b.price ?? 0 };
+ });
+ }
+ for(const l of open){
+ legs.push({ side:(l.side||l.leg_type), strike:+(l.strike||0), qty:+(l.qty||0), price:+(l.price||0) });
+ }
+ const ps = (p.regime_snapshot||{}).spot;
+ if(anchor==null && ps) anchor = +ps;
+ }
+ return { legs, anchor, usingEntry };
+ },
+ // payoff (P&L vs entry) of all legs at a given underlying value at expiry
+ legsPnl(legs, u){
+ let pnl = 0;
+ for(const l of legs){
+ const q = l.qty, px = l.price, k = l.strike, s = l.side;
+ let settle; // intrinsic value at expiry per unit
+ if(s==='CE') settle = Math.max(0, u - k);
+ else if(s==='PE') settle = Math.max(0, k - u);
+ else settle = u; // FUT / EQ: linear in underlying
+ // short (q<0): collected px, pay settle. long (q>0): paid px, receive settle.
+ pnl += q * (settle - px);
+ }
+ return pnl;
+ },
+ buildAnalyse(){
+ const { legs, anchor, usingEntry } = this.analyseLegs();
+ const an = { spot: this.an.spot, legCount: legs.length, usingEntry,
+ curve:[], table:[], breakevens:[], premium: this.d.totals?.premium ?? null,
+ margin: this.d.totals?.margin_live ?? this.d.totals?.margin ?? null };
+ if(!legs.length){ this.an = an; return; }
+ // spot anchor: user override → regime spot → strike midpoint
+ let spot = an.spot;
+ if(!spot){
+ const ks = legs.filter(l=>l.strike>0).map(l=>l.strike);
+ spot = anchor || (ks.length ? (Math.min(...ks)+Math.max(...ks))/2 : 0);
+ an.spot = Math.round(spot);
+ }
+ this.an.spot = an.spot;
+ const lo = spot*0.92, hi = spot*1.08, N = 120;
+ const pts = [];
+ for(let i=0;i<=N;i++){ const u = lo + (hi-lo)*i/N; pts.push({u, pnl: this.legsPnl(legs, u)}); }
+ an.curve = pts; an.xmin = Math.round(lo); an.xmax = Math.round(hi);
+ // metrics
+ const pnls = pts.map(p=>p.pnl);
+ an.maxProfit = Math.max(...pnls); an.maxLoss = Math.min(...pnls);
+ an.rr = (an.maxLoss<0) ? Math.abs(an.maxProfit/an.maxLoss) : null;
+ an.pop = 100 * pnls.filter(v=>v>=0).length / pnls.length;
+ // breakevens: sign changes
+ const bes = [];
+ for(let i=1;i<pts.length;i++){
+ if((pts[i-1].pnl<0)!==(pts[i].pnl<0)){
+ const a=pts[i-1], b=pts[i], t = a.pnl/(a.pnl-b.pnl);
+ bes.push(Math.round(a.u + t*(b.u-a.u)));
+ }
+ }
+ an.breakevens = bes;
+ // SVG geometry (viewBox 600x240, pad 0)
+ const W=600,H=240,padY=14;
+ const pmax=Math.max(...pnls,1), pmin=Math.min(...pnls,-1);
+ const range = (pmax-pmin)||1;
+ const xOf=u=>(u-lo)/(hi-lo)*W;
+ const yOf=v=>padY + (pmax-v)/range*(H-2*padY);
+ an.zeroY = yOf(0); an.spotX = xOf(spot);
+ an.poly = pts.map(p=>xOf(p.u).toFixed(1)+','+yOf(p.pnl).toFixed(1)).join(' ');
+ an.beX = bes.map(xOf);
+ // profit/loss fill polygons (clip at zero line)
+ const top = pts.map(p=>xOf(p.u).toFixed(1)+','+yOf(Math.max(0,p.pnl)).toFixed(1));
+ an.fillProfit = (xOf(lo).toFixed(1)+','+an.zeroY.toFixed(1))+' '+top.join(' ')+' '+(xOf(hi).toFixed(1)+','+an.zeroY.toFixed(1));
+ const bot = pts.map(p=>xOf(p.u).toFixed(1)+','+yOf(Math.min(0,p.pnl)).toFixed(1));
+ an.fillLoss = (xOf(lo).toFixed(1)+','+an.zeroY.toFixed(1))+' '+bot.join(' ')+' '+(xOf(hi).toFixed(1)+','+an.zeroY.toFixed(1));
+ an._geom = { lo, hi, W, xOf, yOf, legs };
+ // P&L table: spot ±0,2,4,6,8% both sides
+ const steps=[-8,-6,-4,-2,0,2,4,6,8];
+ an.table = steps.map(pct=>{ const u=Math.round(spot*(1+pct/100));
+ return { u, pct, pnl: this.legsPnl(legs,u), atSpot: pct===0 }; });
+ this.an = an;
+ },
+ hoverSvg(e){
+ const g=this.an._geom; if(!g) return;
+ const r=e.currentTarget.getBoundingClientRect();
+ const x=(e.clientX-r.left)/r.width*g.W;
+ const u=g.lo + (x/g.W)*(g.hi-g.lo);
+ const pnl=this.legsPnl(g.legs,u);
+ this.an.hover={ x, y:g.yOf(pnl), u:Math.round(u), pnl };
+ },
+ };
+}
+</script>
+{% endblock %}

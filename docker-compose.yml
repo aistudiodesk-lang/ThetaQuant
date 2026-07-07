@@ -1,0 +1,23 @@
+# Theta Quant engine — local/containerised run.
+#   docker compose up --build
+#
+# Data and secrets stay on the HOST and are mounted in — nothing sensitive is
+# ever copied into the image or pushed to a registry. Backtest parquet is
+# mounted read-only (hard rule: never write to the data source).
+services:
+  engine:
+    build: .
+    image: thetaquant-engine
+    ports:
+      - "8000:8000"
+    environment:
+      TQ_DATA_DIR: /data
+    env_file:
+      - .env            # optional non-secret overrides (see .env.example)
+    volumes:
+      - ./data:/data                              # writable app data (journal, snapshots)
+      - ${HOME}/.config:/root/.config:ro          # runtime creds (kite/session/users) read-only
+      - ./data/parquet:/data/parquet:ro           # backtest datasets — READ ONLY
+    restart: unless-stopped
+# Phase 2: once secret paths use lib.config.config_file(), set TQ_CONFIG_DIR=/secrets
+# and mount ${HOME}/.config:/secrets:ro instead — decouples secrets from $HOME.

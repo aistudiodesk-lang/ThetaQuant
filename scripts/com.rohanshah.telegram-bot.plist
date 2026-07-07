@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.rohanshah.telegram-bot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/env</string>
+        <string>python3</string>
+        <string>/Users/rohanshah/Desktop/AI Instructions/Trading Developments/05 - Backtest Engine (separate)/scripts/telegram_bot.py</string>
+    </array>
+
+    <!-- Restart automatically if it crashes -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Start on system boot -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- Throttle restarts: wait 30s between attempts -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <!-- Logs -->
+    <key>StandardOutPath</key>
+    <string>/Users/rohanshah/Desktop/AI Instructions/Trading Developments/05 - Backtest Engine (separate)/results/telegram_bot.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/rohanshah/Desktop/AI Instructions/Trading Developments/05 - Backtest Engine (separate)/results/telegram_bot.stderr.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/rohanshah/Desktop/AI Instructions/Trading Developments/05 - Backtest Engine (separate)</string>
+</dict>
+</plist>

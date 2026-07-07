@@ -1,0 +1,623 @@
+{% extends "base.html" %}
+{% block title %}Playbook · Theta Quant{% endblock %}
+
+{% block content %}
+<div class="space-y-6" x-data="playbookApp()" x-init="init()">
+
+ <!-- Header -->
+ <div class="flex items-center justify-between">
+ <div>
+ <h1 class="text-xl font-bold tracking-tight">Strategy</h1>
+ <div class="text-[12px] text-[var(--text-2)] mt-1">Regime → action → strikes → live triggers. Rules &amp; evidence at the bottom.</div>
+ </div>
+ <div class="flex items-center gap-3">
+ <a href="/manipulation/SENSEX" class="text-[11px] px-2.5 py-1.5 rounded-md border border-[var(--border)] text-[var(--text-3)] font-semibold" title="Spike/manipulation harvesting (experimental)">Harvest ↗</a>
+ <button @click="refreshRegime()" class="text-[11px] px-3 py-1.5 rounded-md bg-[var(--text-1)] text-[var(--surface)] font-semibold">
+ ↻ Refresh
+ </button>
+ <span class="text-[11px] text-[var(--text-3)] num" x-text="regime.computed_at || '—'"></span>
+ </div>
+ </div>
+
+
+
+ <!-- ═══ LEVEL 1: NEXT ACTION (hero) ═══ -->
+ <div class="card p-5" :class="{'ring-2 ring-gain-500': na.urgency==='act_now', 'ring-2 ring-loss-500': na.urgency==='danger', 'ring-1 ring-warn-500': na.urgency==='warning'}">
+ <div class="flex flex-wrap items-center justify-between gap-3">
+ <div>
+ <div class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mb-1">Right now</div>
+ <div class="text-[17px] font-bold leading-tight" x-text="na.headline || 'Loading…'"></div>
+ <div class="text-[12px] text-[var(--text-2)] mt-1" x-text="na.detail"></div>
+ <div class="text-[12px] font-semibold mt-2 num" x-show="expiryStats()" x-text="expiryStats()"></div>
+ </div>
+ <div class="text-right shrink-0">
+ <div class="flex items-center gap-2 justify-end">
+ <span class="pill font-bold" :class="{'bg-gain-600 text-white': na.urgency==='act_now', 'bg-loss-500 text-white': na.urgency==='danger', 'bg-warn-100 text-warn-700': na.urgency==='warning', 'bg-[var(--bg)] text-[var(--text-2)]': ['idle','hold','active'].includes(na.urgency)}" x-text="(na.urgency||'').replace('_',' ')"></span>
+ <span class="pill" :class="{'bg-gain-100 text-gain-700': ['calm_green','normal'].includes(na.regime), 'bg-warn-100 text-warn-700': na.regime==='moderate', 'bg-loss-100 text-loss-700': na.regime==='high_risk'}" x-show="na.regime" x-text="na.regime"></span>
+ </div>
+ <div class="num text-[11px] text-[var(--text-3)] mt-2">
+ <span x-show="regime.snapshot">NIFTY <b x-text="regime.snapshot?.NIFTY?.spot"></b> · SENSEX <b x-text="regime.snapshot?.SENSEX?.spot"></b> · VIX <b x-text="regime.snapshot?.vix"></b></span>
+ · <span x-text="na.computed_at"></span>
+ </div>
+ </div>
+ </div>
+ <div x-show="(regime.hard_exclusions||[]).length" class="mt-3 p-2 rounded-md bg-loss-50 border border-loss-100 text-[11px] text-loss-700">
+ <template x-for="e in regime.hard_exclusions"><span class="mr-3"> <span x-text="e"></span></span></template>
+ </div>
+ </div>
+
+ <!-- Strike exploration moved to the Strategy Builder -->
+ <a href="/builder" class="card p-3.5 flex items-center justify-between gap-3 hover:border-[var(--blue)] transition group mb-1">
+  <div>
+   <div class="text-[13px] font-semibold">Explore strikes &amp; size a position → <span class="text-[var(--blue)]">Strategy Builder</span></div>
+   <div class="text-[11px] text-[var(--text-3)] mt-0.5">% / points / fixed strike, live premiums, lots &amp; per-Cr. Use the Expiry Desk below for quick recommended strikes.</div>
+  </div>
+  <span class="text-[18px] text-[var(--text-3)] group-hover:text-[var(--blue)] transition">↗</span>
+ </a>
+
+ <!-- ═══ TIER-4 KICKER (analysis 034) — live midday card ═══ -->
+ <div class="card p-4" x-data="kickerCard()" x-init="load(); setInterval(()=>load(), 60000)">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-1">
+   <div class="flex items-center gap-2">
+    <span class="text-[14px] font-bold">Midday Kicker</span>
+    <span class="pill bg-[var(--bg)] text-[var(--text-2)] text-[10px]">Tier 4 · NIFTY only · 034</span>
+    <span x-show="k.verdict" class="pill text-[11px] font-bold"
+          :class="k.phase==='window'?'bg-gain-100 text-gain-700':(k.verdict==='SKIP'||k.phase==='over')?'bg-[var(--bg)] text-[var(--text-3)]':'bg-warn-100 text-warn-700'"
+          x-text="k.verdict"></span>
+   </div>
+   <div class="text-[10px] text-[var(--text-3)] num" x-text="k.recipe||''"></div>
+  </div>
+  <template x-if="k.entry_comb">
+   <div>
+    <div class="grid grid-cols-2 md:grid-cols-6 gap-2 mt-2 num text-[12px]">
+     <div class="kpi-tile !p-2.5"><div class="lbl">Range so far</div><div class="val !text-[15px]" x-text="k.range_pct+'%'"></div><div class="text-[9px] text-[var(--text-3)]" x-text="'→ strikes at '+k.dist_pct+'%'"></div></div>
+     <div class="kpi-tile !p-2.5"><div class="lbl">SELL PE</div><div class="val !text-[15px] text-loss-600" x-text="k.pe_strike"></div><div class="text-[9px] text-[var(--text-3)]" x-text="'₹'+k.pe_ltp"></div></div>
+     <div class="kpi-tile !p-2.5"><div class="lbl">SELL CE</div><div class="val !text-[15px] text-gain-600" x-text="k.ce_strike"></div><div class="text-[9px] text-[var(--text-3)]" x-text="'₹'+k.ce_ltp"></div></div>
+     <div class="kpi-tile !p-2.5"><div class="lbl">Combined</div><div class="val !text-[15px]" x-text="'₹'+k.entry_comb"></div><div class="text-[9px] text-[var(--text-3)]" x-text="k.premium_per_cr?('₹'+k.premium_per_cr.toLocaleString('en-IN')+'/Cr'):''"></div></div>
+     <div class="kpi-tile !p-2.5" style="background:var(--blue-tint)"><div class="lbl">TP — buy back at</div><div class="val !text-[15px]" style="color:var(--blue)" x-text="'₹'+k.tp_level"></div><div class="text-[9px] text-[var(--text-3)]" x-text="k.capture_per_cr?('locks ₹'+k.capture_per_cr.toLocaleString('en-IN')+'/Cr'):''"></div></div>
+     <div class="kpi-tile !p-2.5"><div class="lbl">SL — out at</div><div class="val !text-[15px] text-loss-600" x-text="'₹'+k.sl_level"></div><div class="text-[9px] text-[var(--text-3)]">at market, no waiting</div></div>
+    </div>
+    <div class="text-[10px] text-[var(--text-3)] mt-2"><b class="text-warn-600">Discipline:</b> <span x-text="k.discipline"></span> <b>Sizing:</b> <span x-text="k.sizing"></span></div>
+    <div class="text-[10px] text-[var(--text-3)] num mt-0.5" x-text="'Backtest (56 expiries): +₹'+(k.backtest?k.backtest.mean_pcr.toLocaleString('en-IN'):'')+'/Cr mean · '+(k.backtest?k.backtest.win_pct:'')+'% win · TP hits '+(k.backtest?k.backtest.tp_hit_pct:'')+'% · worst −₹2.04L/Cr'"></div>
+   </div>
+  </template>
+  <div x-show="!k.entry_comb && k.why" class="text-[12px] text-[var(--text-3)] mt-1" x-text="k.why"></div>
+ </div>
+
+ <!-- ═══ EXPIRY DESK — strike recommendations with editable strikes ═══ -->
+ <div class="card p-5">
+ <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+ <div class="flex items-center gap-3">
+ <span class="text-[14px] font-bold">Expiry Desk</span>
+ <select x-model="recsInstrument" @change="refreshRecs()" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1 bg-[var(--surface)]">
+ <option value="">Auto (today's expiry)</option>
+ <option value="NIFTY">NIFTY</option>
+ <option value="SENSEX">SENSEX</option>
+ </select>
+ <span class="pill bg-[var(--text-1)] text-[var(--surface)] font-bold" x-text="(recs.day_type || '—') + ' · ' + (recs.instrument || '')"></span>
+ <span class="pill" :class="{'bg-gain-100 text-gain-700': ['calm_green','normal'].includes(recs.regime), 'bg-warn-100 text-warn-700': recs.regime==='moderate', 'bg-loss-100 text-loss-700': recs.regime==='high_risk'}" x-text="'regime: ' + (recs.regime || '—')"></span>
+ </div>
+ <div class="flex items-center gap-2 text-[11px] text-[var(--text-3)] num flex-wrap">
+ <span class="px-2.5 py-1 rounded-lg text-[14px] font-bold" style="background:var(--blue-tint);color:var(--blue)"><span x-text="recs.instrument || '—'"></span> <span x-text="recs.spot?recs.spot.toLocaleString('en-IN'):'—'"></span></span>
+ <span x-show="likelyRange()" class="px-2.5 py-1 rounded-lg font-semibold" style="background:var(--amber-fill);color:var(--amber)">likely range <span x-text="likelyRange()"></span></span>
+ <span>· expiry <span x-text="recs.next_expiry || '—'"></span> · <span x-text="recs.computed_at || ''"></span></span>
+ <span class="text-[10px]" x-text="recs.lot_size ? (recs.lot_size + ' units/lot · ' + recs.lots_per_cr + ' lots/Cr') : ''"></span>
+ </div>
+ </div>
+
+ <div x-show="!recs.is_expiry_today && recs.day_type" class="mb-3 p-2 rounded-md bg-warn-50 border border-warn-100 text-[11px] text-warn-700">
+ Not <b x-text="recs.instrument"></b> expiry today (<span x-text="recs.day_type"></span>, expiry <span x-text="recs.next_expiry"></span>). Showing the E-0 playbook as preview — premiums reflect remaining time value.
+ </div>
+
+ <template x-for="t in recs.tiers || []" :key="t.tier">
+ <div class="mb-5">
+ <div class="flex items-center gap-2 mb-2">
+ <span class="font-bold text-[13px]" x-text="t.tier"></span>
+ <span class="pill bg-accent-100 text-accent-700" x-text="'≤' + t.book_pct + '% of book'"></span>
+ </div>
+ <div class="grid lg:grid-cols-2 gap-3">
+ <template x-for="(o, oi) in t.options" :key="oi">
+ <div class="card-flat p-4 border" :class="o.floor_ok ? 'border-gain-100' : 'border-warn-100'">
+ <!-- header row -->
+ <div class="flex items-center justify-between mb-3">
+ <span class="pill font-bold" :class="o.label===' Star' ? 'bg-accent-600 text-white' : (o.label==='Recommended' ? 'bg-gain-600 text-white' : 'bg-[var(--bg)] text-[var(--text-2)]')" x-text="o.label"></span>
+ <span class="text-[10px] num text-[var(--text-3)]" x-text="liveDist(o) + '% OTM'"></span>
+ <span class="pill" :class="o.floor_ok ? 'bg-gain-100 text-gain-700' : 'bg-warn-100 text-warn-700'" x-text="(liveMetrics(o).per_cr >= o.floor_per_cr) ? 'floor ✓' : 'below ₹' + (o.floor_per_cr/1000) + 'K floor'"></span>
+ <a :href="'/builder'" class="pill bg-accent-50 text-accent-700 border border-accent-200" title="Open in Strategy Builder to size / adjust">Builder ↗</a>
+ </div>
+ <!-- editable strikes -->
+ <div class="grid grid-cols-2 gap-3 mb-3">
+ <div>
+ <div class="text-[10px] uppercase text-[var(--text-3)] mb-1">PE strike (sell)</div>
+ <div class="flex items-center gap-1">
+ <button @click="stepStrike(o, 'pe', -1)" class="w-7 h-7 rounded border border-[var(--border)] font-bold hover:bg-[var(--bg)]">−</button>
+ <input type="number" x-model.number.lazy="o.pe_strike" @change="" class="num w-[88px] text-center text-[15px] font-bold border border-[var(--border)] rounded-md py-1">
+ <button @click="stepStrike(o, 'pe', 1)" class="w-7 h-7 rounded border border-[var(--border)] font-bold hover:bg-[var(--bg)]">+</button>
+ </div>
+ <div class="num text-[12px] mt-1">LTP <b>₹<span x-text="ltpFor(o.pe_strike,'pe') ?? '—'"></span></b>
+ <span class="text-[10px] text-[var(--text-3)]" x-text="ptsAway(o.pe_strike) + ' pts · '"></span><b class="text-[10px] text-accent-700" x-text="pctAway(o.pe_strike) + '% OTM'"></b>
+ <button @click="qx = qx===(o.label+'pe')?null:(o.label+'pe')" class="text-[10px] text-accent-600 ml-1 underline">quote</button></div>
+ <div x-show="qx===(o.label+'pe')" class="mt-1 rounded bg-[var(--bg)] p-2 text-[10px] num grid grid-cols-2 gap-x-3 gap-y-0.5">
+ <span class="text-[var(--text-3)]">Bid <b class="text-[var(--text-1)]" x-text="quoteFor(o.pe_strike,'pe').bid ?? '—'"></b></span>
+ <span class="text-[var(--text-3)]">Ask <b class="text-[var(--text-1)]" x-text="quoteFor(o.pe_strike,'pe').ask ?? '—'"></b></span>
+ <span class="text-[var(--text-3)]">High <b class="text-[var(--text-1)]" x-text="quoteFor(o.pe_strike,'pe').high ?? '—'"></b></span>
+ <span class="text-[var(--text-3)]">Low <b class="text-[var(--text-1)]" x-text="quoteFor(o.pe_strike,'pe').low ?? '—'"></b></span>
+ <span class="text-[var(--text-3)]">OI <b class="text-[var(--text-1)]" x-text="(quoteFor(o.pe_strike,'pe').oi||0).toLocaleString('en-IN')"></b></span>
+ <span class="text-[var(--text-3)]">Vol <b class="text-[var(--text-1)]" x-text="(quoteFor(o.pe_strike,'pe').vol||0).toLocaleString('en-IN')"></b></span>
+ </div>
+ </div>
+ <div>
+ <div class="text-[10px] uppercase text-[var(--text-3)] mb-1">CE strike (sell)</div>
+ <div class="flex items-center gap-1">
+ <button @click="stepStrike(o, 'ce', -1)" class="w-7 h-7 rounded border border-[var(--border)] font-bold hover:bg-[var(--bg)]">−</button>
+ <input type="number" x-model.number.lazy="o.ce_strike" class="num w-[88px] text-center text-[15px] font-bold border border-[var(--border)] rounded-md py-1">
+ <button @click="stepStrike(o, 'ce', 1)" class="w-7 h-7 rounded border border-[var(--border)] font-bold hover:bg-[var(--bg)]">+</button>
+ </div>
+ <div class="num text-[12px] mt-1">LTP <b>₹<span x-text="ltpFor(o.ce_strike,'ce') ?? '—'"></span></b>
+ <span class="text-[10px] text-[var(--text-3)]" x-text="ptsAway(o.ce_strike) + ' pts · '"></span><b class="text-[10px] text-accent-700" x-text="pctAway(o.ce_strike) + '% OTM'"></b>
+ <button @click="qx = qx===(o.label+'ce')?null:(o.label+'ce')" class="text-[10px] text-accent-600 ml-1 underline">quote</button></div>
+ <div x-show="qx===(o.label+'ce')" class="mt-1 rounded bg-[var(--bg)] p-2 text-[10px] num grid grid-cols-2 gap-x-3 gap-y-0.5">
+ <span class="text-[var(--text-3)]">Bid <b class="text-[var(--text-1)]" x-text="quoteFor(o.ce_strike,'ce').bid ?? '—'"></b></span>
+ <span class="text-[var(--text-3)]">Ask <b class="text-[var(--text-1)]" x-text="quoteFor(o.ce_strike,'ce').ask ?? '—'"></b></span>
+ <span class="text-[var(--text-3)]">High <b class="text-[var(--text-1)]" x-text="quoteFor(o.ce_strike,'ce').high ?? '—'"></b></span>
+ <span class="text-[var(--text-3)]">Low <b class="text-[var(--text-1)]" x-text="quoteFor(o.ce_strike,'ce').low ?? '—'"></b></span>
+ <span class="text-[var(--text-3)]">OI <b class="text-[var(--text-1)]" x-text="(quoteFor(o.ce_strike,'ce').oi||0).toLocaleString('en-IN')"></b></span>
+ <span class="text-[var(--text-3)]">Vol <b class="text-[var(--text-1)]" x-text="(quoteFor(o.ce_strike,'ce').vol||0).toLocaleString('en-IN')"></b></span>
+ </div>
+ </div>
+ </div>
+ <!-- metrics grid -->
+ <div class="grid grid-cols-3 gap-2 mb-3 text-center">
+ <div class="bg-[var(--bg)] rounded-md p-2">
+ <div class="text-[9px] uppercase text-[var(--text-3)]">Unit premium</div>
+ <div class="num font-bold text-[15px]">₹<span x-text="liveMetrics(o).combined ?? '—'"></span></div>
+ </div>
+ <div class="bg-gain-50 rounded-md p-2">
+ <div class="text-[9px] uppercase text-gain-700">Premium / Cr</div>
+ <div class="num font-bold text-[15px] text-gain-700">₹<span x-text="liveMetrics(o).per_cr ? (liveMetrics(o).per_cr/1000).toFixed(1)+'K' : '—'"></span></div>
+ </div>
+ <div class="bg-[var(--bg)] rounded-md p-2">
+ <div class="text-[9px] uppercase text-[var(--text-3)]">PoP (backtest)<span x-show="o.pop_meta && o.pop_meta.regime" class="normal-case text-[var(--text-3)]" x-text="' · '+(o.pop_meta?o.pop_meta.regime:'')"></span></div>
+ <div class="num font-bold text-[15px]" :class="(o.pop_pct!=null && o.pop_pct<90)?'text-warn-600':''" x-text="(o.pop_pct ?? '—') + '%'"></div>
+ <div x-show="o.pop_meta && o.pop_meta.low_sample" class="text-[8px] text-warn-600" x-text="'low sample n='+(o.pop_meta?o.pop_meta.n:'')"></div>
+ </div>
+ </div>
+ <div class="flex items-center gap-3 text-[10px] text-[var(--text-2)] mb-2">
+ <span>⏰ Entry <b x-text="o.entry_time"></b></span>
+ <span> <b x-text="o.exit_rule"></b></span>
+ </div>
+ <div class="text-[11px] leading-snug text-[var(--text-1)] mb-1" x-text="o.reason"></div>
+ <div class="text-[10px] text-[var(--text-3)]" x-text="o.max_loss_note"></div>
+ <div class="text-[10px] text-[var(--text-3)] mt-1" x-show="o.wait_advice"><span x-text="o.wait_advice"></span></div>
+ <div class="text-[10px] text-[var(--text-3)]" x-show="o.max_premium_note"><span x-text="o.max_premium_note"></span></div>
+ </div>
+ </template>
+ </div>
+ </div>
+ </template>
+
+ <div class="mt-2 border-t border-[var(--border)] pt-2">
+ <template x-for="n in recs.notes || []">
+ <div class="text-[10px] text-[var(--text-3)]" x-text="'· ' + n"></div>
+ </template>
+ </div>
+ </div>
+
+
+ <!-- LIVE TRIGGERS — Y/O/R status of open trades -->
+ <div class="card p-5" x-show="(monitor.items || []).length > 0">
+ <div class="flex items-center justify-between mb-3">
+ <div class="text-[11px] uppercase tracking-wider text-[var(--text-3)] font-semibold"> Live triggers — open trades</div>
+ <div class="flex items-center gap-2">
+ <button @click="enablePopups()" class="text-[10px] px-2 py-0.5 rounded border border-[var(--border)]" x-text="popupsOn ? 'pop-ups on' : ' enable pop-ups'"></button>
+ <span class="text-[11px] text-[var(--text-3)] num" x-text="monitor.computed_at || ''"></span>
+ </div>
+ </div>
+ <div class="space-y-2">
+ <template x-for="m in monitor.items || []" :key="m.id">
+ <div class="card-flat p-3 border"
+ :class="{'border-loss-500 bg-loss-50': m.overall.startsWith('RED'), 'border-warn-500 bg-warn-50': m.overall==='ORANGE', 'border-warn-100': m.overall==='YELLOW_WATCH', 'border-gain-100': m.overall==='SAFE', 'border-gain-500 bg-gain-50': m.overall==='PROFIT_TAKE'}">
+ <div class="flex items-center justify-between mb-1">
+ <span class="font-bold text-[13px]">
+ <span x-text="m.instrument"></span> · <span x-text="m.tier"></span>
+ <span class="text-[10px] text-[var(--text-3)] font-normal num" x-text="'entry ' + (m.entry_time || '?')"></span>
+ </span>
+ <span class="pill font-bold"
+ :class="{'bg-loss-500 text-white': m.overall.startsWith('RED'), 'bg-warn-500 text-white': m.overall==='ORANGE', 'bg-warn-100 text-warn-700': m.overall==='YELLOW_WATCH', 'bg-gain-100 text-gain-700': m.overall==='SAFE', 'bg-gain-600 text-white': m.overall==='PROFIT_TAKE'}"
+ x-text="m.overall==='PROFIT_TAKE' ? ' TAKE PROFIT' : m.overall.replace('_',' ')"></span>
+ <span class="pill bg-[var(--bg)] text-[var(--text-2)] num" x-show="m.pop_pct != null" x-text="'PoP ' + m.pop_pct + '%'"></span>
+ </div>
+ <div class="flex flex-wrap gap-2">
+ <template x-for="l in m.legs">
+ <div class="num text-[11px] px-2 py-1 rounded bg-[var(--bg)]"
+ :class="{'text-loss-600 font-bold': l.level.startsWith('RED'), 'text-warn-600 font-bold': l.level==='ORANGE'}">
+ <div><span x-text="l.strike + ' ' + l.side"></span>:
+ <span x-text="l.buffer_pts + 'pts (' + l.buffer_pct + '%)'"></span></div>
+ <div class="text-[10px] font-normal text-[var(--text-3)] mt-0.5"
+ x-text="'spot ' + l.direction + ' ' + l.yellow_at.toLocaleString('en-IN') + ' · ' + l.direction + ' ' + l.orange_at.toLocaleString('en-IN') + ' (prep exit) · ' + l.direction + ' ' + l.red_at.toLocaleString('en-IN') + ' (EXIT) · ITM ' + l.direction + ' ' + l.itm_at.toLocaleString('en-IN')"></div>
+ </div>
+ </template>
+ </div>
+ <div class="text-[10px] mt-1"
+ x-show="m.overall !== 'SAFE'"
+ :class="m.overall.startsWith('RED') ? 'text-loss-700 font-bold' : 'text-warn-700'"
+ x-text="m.overall==='PROFIT_TAKE' ? ('→ Combined ₹' + m.combined_now + ' = ' + m.decay_pct + '% decay captured. Book both legs, lock the win.') : m.overall.startsWith('RED') ? '→ RED: close BOTH legs at market. No re-entry today.' : (m.overall==='ORANGE' ? '→ ORANGE: prepare exit. If 30-min move confirms, close threatened leg.' : '→ Yellow watch: monitor 30-min directional move before acting.')"></div>
+ <div class="text-[10px] text-[var(--text-3)] num mt-0.5" x-show="m.decay_pct != null" x-text="'combined ₹' + m.combined_entry + ' → ₹' + m.combined_now + ' (' + m.decay_pct + '% decayed)'"></div>
+ </div>
+ </template>
+ </div>
+ </div>
+
+ <!-- LEVEL 3: collapsed reference -->
+ <div class="card p-5">
+ <button @click="showCalc=!showCalc" class="w-full text-left text-[12px] font-bold flex justify-between items-center">
+ <span>Trigger calculator (manual)</span><span x-text="showCalc?'▾':'▸'"></span>
+ </button>
+ </div>
+ <div class="card p-5" x-show="showCalc" x-cloak>
+ <div class="text-[11px] uppercase tracking-wider text-[var(--text-3)] font-semibold mb-3">Position Trigger Calculator</div>
+ <div class="text-[12px] text-[var(--text-2)] mb-3">Enter a position to compute exact Yellow / Red spot levels. Set these as alerts on your phone.</div>
+
+ <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+ <div>
+ <label class="text-[10px] text-[var(--text-3)] uppercase">Instrument</label>
+ <select x-model="trig.instrument" class="w-full text-sm border border-[var(--border)] rounded-md px-2 py-1.5">
+ <option>SENSEX</option><option>NIFTY</option>
+ </select>
+ </div>
+ <div>
+ <label class="text-[10px] text-[var(--text-3)] uppercase">Entry spot</label>
+ <input x-model.number.lazy="trig.entry_spot" type="number" class="w-full text-sm border border-[var(--border)] rounded-md px-2 py-1.5 num">
+ </div>
+ <div>
+ <label class="text-[10px] text-[var(--text-3)] uppercase">PE strike</label>
+ <input x-model.number.lazy="trig.pe_strike" type="number" class="w-full text-sm border border-[var(--border)] rounded-md px-2 py-1.5 num">
+ </div>
+ <div>
+ <label class="text-[10px] text-[var(--text-3)] uppercase">CE strike</label>
+ <input x-model.number.lazy="trig.ce_strike" type="number" class="w-full text-sm border border-[var(--border)] rounded-md px-2 py-1.5 num">
+ </div>
+ <div>
+ <label class="text-[10px] text-[var(--text-3)] uppercase">PE entry premium</label>
+ <input x-model.number.lazy="trig.pe_entry" type="number" step="0.01" class="w-full text-sm border border-[var(--border)] rounded-md px-2 py-1.5 num">
+ </div>
+ <div>
+ <label class="text-[10px] text-[var(--text-3)] uppercase">CE entry premium</label>
+ <input x-model.number.lazy="trig.ce_entry" type="number" step="0.01" class="w-full text-sm border border-[var(--border)] rounded-md px-2 py-1.5 num">
+ </div>
+ <div>
+ <label class="text-[10px] text-[var(--text-3)] uppercase">Pre-entry high (9:15→entry)</label>
+ <input x-model.number.lazy="trig.pre_entry_high" type="number" class="w-full text-sm border border-[var(--border)] rounded-md px-2 py-1.5 num">
+ </div>
+ <div class="flex items-end">
+ <button @click="computeTriggers()" class="w-full text-[12px] px-3 py-1.5 rounded-md bg-accent-600 text-white font-semibold">
+ Compute triggers
+ </button>
+ </div>
+ </div>
+
+ <div x-show="triggers.entry_spot" class="grid md:grid-cols-2 gap-3 mt-4">
+ <div class="card-flat p-3 bg-warn-50 border border-warn-100">
+ <div class="font-bold text-warn-700 text-[12px] mb-2">YELLOW PE — close losing PE leg only</div>
+ <div class="num text-2xl font-bold" x-text="triggers.yellow_pe?.spot_alert"></div>
+ <div class="text-[10px] text-[var(--text-2)]" x-text="triggers.yellow_pe?.secondary_check"></div>
+ <div class="text-[11px] mt-2 font-semibold" x-text="triggers.yellow_pe?.action"></div>
+ </div>
+ <div class="card-flat p-3 bg-warn-50 border border-warn-100">
+ <div class="font-bold text-warn-700 text-[12px] mb-2">YELLOW CE — close losing CE leg only</div>
+ <div class="num text-2xl font-bold" x-text="triggers.yellow_ce?.spot_alert"></div>
+ <div class="text-[10px] text-[var(--text-2)]" x-text="triggers.yellow_ce?.secondary_check"></div>
+ <div class="text-[11px] mt-2 font-semibold" x-text="triggers.yellow_ce?.action"></div>
+ </div>
+ <div class="card-flat p-3 bg-loss-50 border border-loss-100">
+ <div class="font-bold text-loss-700 text-[12px] mb-2">RED PE — close BOTH legs</div>
+ <div class="num text-2xl font-bold" x-text="triggers.red_pe?.spot_alert"></div>
+ <div class="text-[11px] mt-2 font-semibold" x-text="triggers.red_pe?.action"></div>
+ </div>
+ <div class="card-flat p-3 bg-loss-50 border border-loss-100">
+ <div class="font-bold text-loss-700 text-[12px] mb-2">RED CE — close BOTH legs</div>
+ <div class="num text-2xl font-bold" x-text="triggers.red_ce?.spot_alert"></div>
+ <div class="text-[11px] mt-2 font-semibold" x-text="triggers.red_ce?.action"></div>
+ </div>
+ <div x-show="triggers.profit_take" class="card-flat p-3 bg-gain-50 border border-gain-100 md:col-span-2">
+ <div class="font-bold text-gain-700 text-[12px] mb-2"> PROFIT TAKE — combined premium target</div>
+ <div class="num text-2xl font-bold">₹<span x-text="triggers.profit_take?.combined_target"></span></div>
+ <div class="text-[11px] mt-2" x-text="triggers.profit_take?.explanation"></div>
+ </div>
+ <div class="md:col-span-2">
+ <button @click="sendTriggersToTelegram()" class="text-[12px] px-3 py-2 rounded-md bg-[var(--text-1)] text-[var(--surface)] font-semibold">
+ Send these triggers to Telegram
+ </button>
+ <span class="text-[11px] text-[var(--text-3)] ml-3" x-text="tgStatus"></span>
+ </div>
+ </div>
+ </div>
+
+ <div class="card p-5">
+ <button @click="showRules=!showRules" class="w-full text-left text-[12px] font-bold flex justify-between items-center">
+ <span> Rules &amp; evidence — what these recommendations are based on</span><span x-text="showRules?'▾':'▸'"></span>
+ </button>
+ <div x-show="showRules" x-cloak class="mt-4 space-y-4 text-[12px]">
+ <div>
+ <div class="font-bold mb-1">Hard exclusions (skip near/mid OTM entirely)</div>
+ <div class="text-[var(--text-2)]">News in 24h (RBI/Fed/budget/war) · |gap| &gt; 0.7% · pre-range &gt; 1.0% · VIX &gt; 19 or +1.5pt rising · Brent ±3%. Any red → Tier 1 only. <i>Basis: all 10 worst days in 119-day backtest had one of these flags (analyses 023-025).</i></div>
+ </div>
+ <div>
+ <div class="font-bold mb-1">Tier 1 distance by regime (analysis 025 · 119 E-0 days · 100% win at these distances)</div>
+ <div class="text-[var(--text-2)]">calm/normal/moderate → <b>2.0% OTM</b> · high-risk → <b>2.25%</b>. Floor 2.0%, never closer. Entry 09:25-09:35. HOLD to expiry.</div>
+ </div>
+ <div>
+ <div class="font-bold mb-1">Tier 2/3 filters (analyses 018-024, §9W)</div>
+ <div class="text-[var(--text-2)]"> SENSEX 1.0% @ 10:00: range ≤0.7% + ₹20K/Cr → 100% win, worst day +₹20K · NIFTY 0.7% @ 10:30: range ≤0.4% + ₹30K/Cr → 100% win · SENSEX 0.7% @ 11:30: range ≤0.8% + ₹30K/Cr · Volatile-recovery 0.5% @ 12:00 with hard 14:00 exit.</div>
+ </div>
+ <div>
+ <div class="font-bold mb-1">Yellow / Red discipline (analyses 019-021)</div>
+ <div class="text-[var(--text-2)]">Yellow = spot eats 50% of buffer AND 0.4% 30-min move → close the threatened leg only (P(ITM|fired)≈40-58%, P(ITM|not fired)=0%). Red = 85% of buffer or strike touch → close BOTH, no re-entry. Never leg out of the winning side. PT: book when combined ≤30% of entry on near-OTM.</div>
+ </div>
+ <div>
+ <div class="font-bold mb-1">E-1 (day before expiry) — analysis 026</div>
+ <div class="text-[var(--text-2)]">calm/normal → 09:20 @ 2.0% · moderate → NIFTY 10:00-11:00 / SENSEX 12:00 @ 2.0% · high-risk → 14:45 @ 3.5% only.</div>
+ </div>
+ <div class="text-[10px] text-[var(--text-3)]">Full printable: TIER_PLAYBOOK_PRINTABLE.pdf · canonical: STRATEGY_LIVE.md §9O-§9W · every live trade feeds the nightly learning loop which recalibrates these tables as data grows.</div>
+ </div>
+ </div>
+ <div class="card p-5" x-show="false">
+ <div class="text-[11px] uppercase tracking-wider text-[var(--text-3)] font-semibold mb-3">Quick reference</div>
+ <table class="data-table">
+ <thead><tr>
+ <th>Setup</th><th>Filter</th><th>Premium ≥</th><th>Exit</th><th>Backtest</th>
+ </tr></thead>
+ <tbody>
+ <tr><td> SENSEX 1.0% @ 10:00</td><td>range ≤0.7%</td><td>₹20K/Cr</td><td>HOLD</td><td class="text-gain-600">+₹47K/Cr · 100% · +₹20K worst</td></tr>
+ <tr><td>NIFTY 0.7% @ 10:30</td><td>range ≤0.4%</td><td>₹30K/Cr</td><td>HOLD</td><td class="text-gain-600">+₹45K/Cr · 100% · +₹32K worst</td></tr>
+ <tr><td>NIFTY 0.5% @ 10:30</td><td>range ≤0.4%</td><td>₹40K/Cr</td><td>HOLD</td><td class="text-gain-600">+₹53K/Cr · 92% · −₹43K worst</td></tr>
+ <tr><td>SENSEX 0.7% @ 11:30</td><td>range ≤0.8%</td><td>₹30K/Cr</td><td>HOLD</td><td class="text-gain-600">+₹42K/Cr · 100% · +₹4K worst</td></tr>
+ <tr><td>SENSEX 0.5% volatile-recovery @ 12:00</td><td>range ≤0.7% by 12:00</td><td>₹40K/Cr</td><td>T_1400 hard</td><td class="text-gain-600">+₹17K/Cr · 80% · −₹2.5K worst</td></tr>
+ <tr><td>SENSEX 1.25% @ 10:00</td><td>range ≤0.8%</td><td>₹15K/Cr</td><td>HOLD</td><td class="text-gain-600">+₹32K/Cr · 100% · +₹400 worst</td></tr>
+ </tbody>
+ </table>
+ </div>
+
+</div>
+
+<script>
+function kickerCard() {
+ return {
+  k: {},
+  async load() {
+   try { this.k = await fetch('/api/kicker/NIFTY').then(r => r.json()); } catch (e) {}
+  },
+ };
+}
+function playbookApp() {
+ return {
+ regime: {},
+ recs: {},
+ na: {},
+ showCalc: false,
+ showRules: false,
+ recsInstrument: '',
+ qx: null,
+ exOpen: false,
+ ex: { inst:'NIFTY', mode:'pct', pePct:4.0, cePct:4.0, pePts:1000, cePts:1000, peStrike:0, ceStrike:0,
+       portfolioCr:100, allocPct:3, spot:0, expiry:'', e0:false, e1:false, loading:false, rows:[],
+       pe:{strike:null,prem:null,dist:null}, ce:{strike:null,prem:null,dist:null},
+       combined:null, lots:null, qty:null, allocCr:null, premCollected:null, perCr:null },
+ chainRows: {}, // strike -> {ce_ltp, pe_ltp}
+ monitor: {},
+ trig: { instrument:'SENSEX', entry_spot:0, pe_strike:0, ce_strike:0, pe_entry:0, ce_entry:0, pre_entry_high:0 },
+ triggers: {},
+ tgStatus: '',
+
+ init() {
+ this.refreshRegime(); this.refreshRecs(); this.refreshMonitor(); this.refreshNA(); this.loadChain();
+ setInterval(()=>{this.refreshRegime(); this.refreshRecs(); this.refreshNA();}, 60000);
+ setInterval(()=>this.refreshMonitor(), 20000);
+ },
+
+ money(v){ if(v==null) return '—'; const s=v<0?'−':'+'; const a=Math.abs(v); if(a>=1e7) return s+'₹'+(a/1e7).toFixed(2)+'Cr'; if(a>=1e5) return s+'₹'+(a/1e5).toFixed(2)+'L'; return s+'₹'+Math.round(a).toLocaleString('en-IN'); },
+ async loadChain(){
+ this.ex.loading=true;
+ try{ const j=await fetch('/api/chain/'+this.ex.inst+'?distance_pct=10').then(r=>r.json());
+ if(j.rows){ this.ex.rows=j.rows; this.ex.spot=j.spot; this.ex.expiry=j.expiry;
+ const today=new Date().toISOString().slice(0,10);
+ this.ex.e0 = j.expiry===today; this.ex.e1 = j.expiry>today;
+ this.resolve(); } }catch(e){} this.ex.loading=false;
+ },
+ _grid(){ return this.ex.inst==='NIFTY'?50:100; },
+ _nearest(target){ const rows=this.ex.rows||[]; if(!rows.length) return null;
+ return rows.reduce((a,r)=>Math.abs(r.strike-target)<Math.abs(a.strike-target)?r:a); },
+ _premOf(row, side){ if(!row) return null; return side==='PE'?row.pe_ltp:row.ce_ltp; },
+ resolveFixed(){ this.ex.mode='fixed'; this._compute(this.ex.peStrike, this.ex.ceStrike); },
+ exploreOption(o){
+ this.exOpen=true; this.ex.mode='fixed';
+ this.ex.peStrike=o.pe_strike; this.ex.ceStrike=o.ce_strike;
+ const inst=this.recs.instrument || this.ex.inst; const switched = inst && inst!==this.ex.inst; this.ex.inst=inst||this.ex.inst;
+ const after=()=>{ this.resolveFixed(); window.scrollTo({top:0,behavior:'smooth'}); };
+ if(switched || !this.ex.rows.length) this.loadChain().then(after); else after();
+ },
+ resolve(){
+ const sp=this.ex.spot; if(!sp){ return; }
+ let peK, ceK;
+ if(this.ex.mode==='pct'){ peK=sp*(1-(this.ex.pePct||0)/100); ceK=sp*(1+(this.ex.cePct||0)/100); }
+ else if(this.ex.mode==='pts'){ peK=sp-(this.ex.pePts||0); ceK=sp+(this.ex.cePts||0); }
+ else { peK=this.ex.peStrike||sp; ceK=this.ex.ceStrike||sp; }
+ const peRow=this._nearest(peK), ceRow=this._nearest(ceK);
+ if(this.ex.mode!=='fixed'){ this.ex.peStrike=peRow?peRow.strike:0; this.ex.ceStrike=ceRow?ceRow.strike:0; }
+ this._compute(peRow?peRow.strike:peK, ceRow?ceRow.strike:ceK);
+ },
+ _compute(peK, ceK){
+ const sp=this.ex.spot||0;
+ const peRow=this._nearest(peK), ceRow=this._nearest(ceK);
+ const pePrem=this._premOf(peRow,'PE'), cePrem=this._premOf(ceRow,'CE');
+ this.ex.pe={strike:peRow?peRow.strike:null, prem:pePrem!=null?pePrem:null, dist:sp&&peRow?(Math.abs((peRow.strike-sp)/sp*100)).toFixed(2):null};
+ this.ex.ce={strike:ceRow?ceRow.strike:null, prem:cePrem!=null?cePrem:null, dist:sp&&ceRow?(Math.abs((ceRow.strike-sp)/sp*100)).toFixed(2):null};
+ const combined=(pePrem||0)+(cePrem||0); this.ex.combined=combined||null;
+ // sizing: lots/Cr from recs if present else estimate; capital = portfolio × alloc%
+ const lotsPerCr = this.recs.lots_per_cr || (this.ex.inst==='NIFTY'?5.7:4.0);
+ const lotSize = this.recs.lot_size || (this.ex.inst==='NIFTY'?75:20);
+ const allocCr=(this.ex.portfolioCr||0)*(this.ex.allocPct||0)/100; this.ex.allocCr=allocCr||null;
+ const lots=Math.floor(lotsPerCr*allocCr); this.ex.lots=lots||null;
+ const qty=lots*lotSize; this.ex.qty=qty||null;
+ const prem=combined*qty; this.ex.premCollected=prem||null;
+ this.ex.perCr = allocCr? prem/allocCr : null;
+ },
+
+ async refreshNA() {
+ try { this.na = await fetch('/api/playbook/next_action').then(r=>r.json()); }
+ catch(e) {}
+ },
+
+ popupsOn: ('Notification' in window) && Notification.permission === 'granted',
+ _lastLevels: {},
+
+ expiryStats() {
+ const inst = this.na.instrument || this.recs.instrument;
+ const s = this.regime.snapshot?.[inst];
+ if (!inst || !s || !s.open) return '';
+ const chg = s.open ? (((s.spot ?? s.open) - s.open) / s.open * 100).toFixed(2) : '0';
+ const rng = s.pre_range_pct ?? '—';
+ return inst + ' · expiry ' + (this.recs.next_expiry || 'today') + ' · ' +
+ (chg >= 0 ? '+' : '') + chg + '% from open · range ' + rng + '% (lo ' +
+ (s.low ?? '—') + ' / hi ' + (s.high ?? '—') + ')';
+ },
+
+ async enablePopups() {
+ if (!('Notification' in window)) { alert('Browser notifications not supported'); return; }
+ const perm = await Notification.requestPermission();
+ this.popupsOn = perm === 'granted';
+ },
+
+ async refreshMonitor() {
+ try {
+ this.monitor = await fetch('/api/monitor/status').then(r=>r.json());
+ // Pop-up on level transitions (PROFIT_TAKE / ORANGE / RED), throttled per id+level
+ for (const m of (this.monitor.items || [])) {
+ const prev = this._lastLevels[m.id];
+ this._lastLevels[m.id] = m.overall;
+ if (prev === m.overall) continue;
+ if (!['PROFIT_TAKE','ORANGE','RED','RED_ITM'].includes(m.overall)) continue;
+ const key = 'popup_' + m.id + '_' + m.overall;
+ const last = +(localStorage.getItem(key) || 0);
+ if (Date.now() - last < 10*60*1000) continue;
+ localStorage.setItem(key, Date.now());
+ const title = m.overall==='PROFIT_TAKE' ? (' TAKE PROFIT — ' + m.instrument + ' ' + (m.tier||''))
+ : (m.overall==='ORANGE' ? ('Approaching trigger — ' + m.instrument) : ('RED — ' + m.instrument + ' CLOSE NOW'));
+ const body = m.overall==='PROFIT_TAKE'
+ ? ('Combined ₹' + m.combined_now + ' = ' + m.decay_pct + '% decayed. Book both legs.')
+ : ((m.legs||[]).map(l => l.strike + ' ' + l.side + ': ' + l.buffer_pts + 'pts').join(' · '));
+ if (this.popupsOn) new Notification(title, { body });
+ }
+ }
+ catch(e) { console.error(e); }
+ },
+
+ async refreshRegime() {
+ try {
+ const r = await fetch('/api/playbook/regime');
+ const j = await r.json();
+ this.regime = j;
+ } catch(e) { console.error(e); }
+ },
+
+ async refreshRecs() {
+ try {
+ const q = this.recsInstrument ? ('?instrument=' + this.recsInstrument) : '';
+ const r = await fetch('/api/playbook/recommendations' + q);
+ this.recs = await r.json();
+ // Fetch full chain once for client-side repricing on strike edits
+ if (this.recs.instrument) {
+ const c = await fetch('/api/chain/' + this.recs.instrument).then(x=>x.json());
+ const map = {};
+ (c.rows || []).forEach(row => { map[row.strike] = row; });
+ this.chainRows = map;
+ }
+ } catch(e) { console.error(e); }
+ },
+
+ // ── Interactive strike helpers ──
+ grid() { return this.recs.instrument === 'NIFTY' ? 50 : 100; },
+ ltpFor(strike, side) {
+ const row = this.chainRows[strike];
+ if (!row) return null;
+ return side === 'pe' ? row.pe_ltp : row.ce_ltp;
+ },
+ stepStrike(o, side, dir) {
+ const g = this.grid();
+ if (side === 'pe') o.pe_strike += dir * g; else o.ce_strike += dir * g;
+ },
+ liveMetrics(o) {
+ const pe = this.ltpFor(o.pe_strike, 'pe'), ce = this.ltpFor(o.ce_strike, 'ce');
+ if (pe == null || ce == null) return { combined: o.combined, per_cr: o.per_cr || 0 };
+ const comb = +(pe + ce).toFixed(2);
+ const per_cr = Math.round(comb * (this.recs.lot_size || 0) * (this.recs.lots_per_cr || 0));
+ return { combined: comb, per_cr };
+ },
+ liveDist(o) {
+ const s = this.recs.spot;
+ if (!s) return o.dist_pct;
+ const peD = (s - o.pe_strike) / s * 100, ceD = (o.ce_strike - s) / s * 100;
+ return ((peD + ceD) / 2).toFixed(2);
+ },
+ ptsAway(strike) {
+ const s = this.recs.spot;
+ return s ? Math.abs(Math.round(s - strike)) : '—';
+ },
+ pctAway(strike) {
+ const s = this.recs.spot;
+ return s ? Math.abs((strike - s) / s * 100).toFixed(2) : '—';
+ },
+ likelyRange() {
+ const s = this.recs.spot; const ks = Object.keys(this.chainRows).map(Number);
+ if (!s || !ks.length) return '';
+ const atm = ks.reduce((a,b)=>Math.abs(b-s)<Math.abs(a-s)?b:a);
+ const r = this.chainRows[atm]; const st = (r?.ce_ltp||0)+(r?.pe_ltp||0);
+ if (!st) return '';
+ return Math.round(s-st).toLocaleString('en-IN') + ' – ' + Math.round(s+st).toLocaleString('en-IN');
+ },
+ quoteFor(strike, side) {
+ const r = this.chainRows[strike]; if (!r) return {};
+ const p = side === 'pe' ? 'pe_' : 'ce_';
+ return { ltp:r[p+'ltp'], bid:r[p+'bid'], ask:r[p+'ask'], high:r[p+'high'], low:r[p+'low'], open:r[p+'open'], oi:r[p+'oi'], vol:r[p+'volume'] };
+ },
+
+ async computeTriggers() {
+ try {
+ const r = await fetch('/api/playbook/triggers', {
+ method:'POST', headers:{'Content-Type':'application/json'},
+ body: JSON.stringify(this.trig),
+ });
+ const j = await r.json();
+ if (j.error) { alert(j.error); return; }
+ this.triggers = j;
+ } catch(e) { alert(e); }
+ },
+
+ async sendTriggersToTelegram() {
+ this.tgStatus = 'sending…';
+ const t = this.triggers;
+ const text = `*${t.instrument} TRIGGERS SET*\n\n` +
+ `Entry spot: ${t.entry_spot}\n` +
+ `PE strike: ${t.pe_strike} (buffer ${t.pe_buffer_pts}pts)\n` +
+ `CE strike: ${t.ce_strike} (buffer ${t.ce_buffer_pts}pts)\n\n` +
+ `*YELLOW PE*: spot ≤ ${t.yellow_pe.spot_alert} AND ${t.yellow_pe.secondary_check}\n` +
+ ` → ${t.yellow_pe.action}\n\n` +
+ `*YELLOW CE*: spot ≥ ${t.yellow_ce.spot_alert} AND ${t.yellow_ce.secondary_check}\n` +
+ ` → ${t.yellow_ce.action}\n\n` +
+ `*RED PE*: spot ≤ ${t.red_pe.spot_alert}\n` +
+ `*RED CE*: spot ≥ ${t.red_ce.spot_alert}\n` +
+ ` → Close BOTH at market\n\n` +
+ (t.profit_take ? ` *PROFIT TAKE*: combined ≤ ₹${t.profit_take.combined_target}\n` : '');
+ try {
+ const r = await fetch('/api/telegram/send', {
+ method:'POST', headers:{'Content-Type':'application/json'},
+ body: JSON.stringify({ text }),
+ });
+ const j = await r.json();
+ this.tgStatus = j.sent ? '✓ sent to Telegram' : ('✗ ' + (j.error || 'failed'));
+ } catch(e) { this.tgStatus = '✗ ' + e; }
+ },
+ };
+}
+</script>
+{% endblock %}

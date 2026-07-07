@@ -1,0 +1,659 @@
+{% extends "base.html" %}
+{% block title %}Covered Calls — Against Investment · Theta Quant{% endblock %}
+{% block content %}
+<div class="space-y-5" x-data="ccInv()" x-init="load()">
+ <div class="flex items-end justify-between gap-3 flex-wrap">
+ <div>
+ <h1 class="text-xl font-bold tracking-tight">Covered Calls — Against Investment <span class="text-[11px] text-[var(--text-3)] font-normal">(S1)</span></h1>
+ <div class="text-[12px] text-[var(--text-3)]">Sell deep/mid-OTM calls against your equity + futures holdings. Track coverage; find safe selling levels. Must not go ITM.</div>
+ </div>
+ <div class="flex gap-2 items-center">
+ <div class="seg">
+ <button @click="tab='cover'" class="seg-btn" :class="tab==='cover'&&'on'">Holdings</button>
+ <button @click="tab='sug'; loadSug(); loadMon()" class="seg-btn" :class="tab==='sug'&&'on'">Strategy</button>
+ <button @click="tab='mon'; loadMon()" class="seg-btn" :class="tab==='mon'&&'on'">Monitoring</button>
+ </div>
+ <span class="w-px h-5 bg-[var(--border)]"></span>
+ <button @click="tab='cons'; loadCon()" class="text-[11px] px-2.5 py-1.5 rounded-md border border-[var(--border)]" :class="tab==='cons'?'bg-[var(--text-1)] text-[var(--surface)]':''">Consolidated</button>
+ <button @click="tab='pnl'; loadSW()" class="text-[11px] px-2.5 py-1.5 rounded-md border border-[var(--border)]" :class="tab==='pnl'?'bg-[var(--text-1)] text-[var(--surface)]':''">Per-stock P&L</button>
+ <button @click="tab='fut'; loadFut()" class="text-[11px] px-2.5 py-1.5 rounded-md border border-[var(--border)]" :class="tab==='fut'?'bg-[var(--text-1)] text-[var(--surface)]':''">Futures M2M</button>
+ <button @click="load()" class="text-[11px] px-2 py-1.5 rounded-md border border-[var(--border)]">↻</button>
+ </div>
+ </div>
+
+ <!-- SUGGESTIONS: selling plan per uncovered holding -->
+ <div x-show="tab==='sug'" class="space-y-3">
+ <div class="text-[11px] text-[var(--text-3)]">Selling plan for stocks with <b>uncovered</b> qty — sell the biggest pending positions first. DEEP (≥10% OTM, ultra-safe) &amp; MID (≥6%) strikes, lots to cover, margin, eligibility, yield/cr. Enter the live premium to check yield.</div>
+ <!-- priority sort/filter bar -->
+ <div class="card p-2.5 flex flex-wrap items-center gap-2 text-[12px]">
+ <span class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">Expiry</span>
+ <select x-model="apprMonth" class="border border-[var(--border)] rounded-lg px-2 py-1.5 text-[12px] font-semibold">
+ <template x-for="m in monthOpts()" :key="m"><option :value="m" x-text="m"></option></template>
+ </select>
+ <span class="w-px h-5 bg-[var(--border)]"></span>
+ <input x-model="sq" placeholder="search stock…" class="num border border-[var(--border)] rounded-lg px-2.5 py-1.5 text-[12px] w-32">
+ <span class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold ml-1">Sort</span>
+ <template x-for="o in [['priority','🔴 Sell-now first'],['pending','Pending qty ↓'],['offhigh','Safest (off-high)'],['covered','Least covered'],['yield','Best yield']]" :key="o[0]">
+ <button @click="sortBy=o[0]" class="px-2.5 py-1 rounded-md text-[11px] font-semibold border" :class="sortBy===o[0]?'bg-[var(--text-1)] text-[var(--surface)] border-[var(--text-1)]':'border-[var(--border)] text-[var(--text-3)]'" x-text="o[1]"></button>
+ </template>
+ <label class="flex items-center gap-1 text-[11px] text-[var(--text-3)] ml-1"><input type="checkbox" x-model="sellNowOnly"> only sell-now</label>
+ <span class="ml-auto text-[11px] text-[var(--text-3)] num"><b class="text-loss-600" x-text="sellNowCount()"></b> to sell now · <span x-text="sortedSug().length"></span> shown</span>
+ </div>
+
+ <!-- TODAY'S APPROVED LIST — WhatsApp-ready batch for the broker / team -->
+ <div x-show="approvals.length" class="card p-3 border-l-4" style="border-left-color:var(--blue)">
+ <div class="flex items-center justify-between mb-2">
+ <div class="text-[12px] font-bold">✓ Approved today <span class="text-[var(--text-3)] font-normal num">(<span x-text="approvals.length"></span> trades)</span></div>
+ <button @click="copyWa()" class="text-[11px] font-semibold px-2.5 py-1.5 rounded-md text-white" style="background:var(--blue)" x-text="apprCopied?'Copied ✓':'Copy for WhatsApp'"></button>
+ </div>
+ <div class="overflow-x-auto"><table class="data-table">
+ <thead><tr><th>Stock</th><th>Strike</th><th class="text-right">Qty</th><th class="text-right">Limit ₹</th><th>Expiry</th><th>Status</th><th></th></tr></thead>
+ <tbody>
+ <template x-for="o in approvals" :key="o.id"><tr>
+ <td class="font-semibold" x-text="o.symbol"></td>
+ <td class="num"><span x-text="o.strike"></span><span x-text="o.side"></span></td>
+ <td class="num text-right" x-text="(o.qty||0).toLocaleString('en-IN')"></td>
+ <td class="num text-right font-semibold" x-text="o.limit_price!=null?('₹'+o.limit_price):'mkt'"></td>
+ <td class="text-[11px]" x-text="o.month"></td>
+ <td><span class="pill text-[9px]" :class="o.status==='claimed'?'bg-gain-100 text-gain-700':o.status==='not_taken'?'bg-loss-100 text-loss-700':'bg-warn-100 text-warn-700'" x-text="o.status==='claimed'?('✓ taken @₹'+(o.claimed_price??'?')):o.status==='not_taken'?'not taken':'approved'"></span></td>
+ <td class="text-right whitespace-nowrap"><button @click="claimOrder(o)" class="text-[10px] text-[var(--blue)] font-semibold">mark taken</button> <button @click="delApprove(o)" class="text-[10px] text-loss-600 ml-1">✕</button></td>
+ </tr></template>
+ </tbody>
+ </table></div>
+ <div class="text-[10px] text-[var(--text-3)] mt-1.5">Copy → paste/screenshot to the broker on WhatsApp. The team (with software access) marks each <b>taken @ price</b> — that's the operational record; the contract-note reco confirms it later.</div>
+ </div>
+
+ <div class="space-y-2">
+ <template x-for="s in sortedSug()" :key="s.symbol">
+ <div class="card p-4">
+ <div class="flex items-center justify-between mb-2">
+ <div class="flex items-center gap-2 flex-wrap">
+ <span class="font-bold text-[13px]" x-text="s.symbol"></span>
+ <span x-show="priority(s).sellNow" class="pill text-[9px] font-bold bg-loss-100 text-loss-700">🔴 SELL NOW</span>
+ <span class="text-[11px] text-[var(--text-3)] num">spot ₹<span x-text="s.current?.toLocaleString('en-IN')"></span> · <span x-text="s.pct_off_high+'% off 52wH'"></span></span></div>
+ <div class="text-[11px] num text-[var(--text-3)]"><b class="text-warn-600 text-[13px]" x-text="(s.uncovered_qty||0).toLocaleString('en-IN')"></b> uncovered · <b x-text="s.lots_to_cover"></b> lots to cover</div>
+ </div>
+ <!-- live technical eligibility (RSI/MACD/trend/breakout) for selling CALLS on this name -->
+ <template x-if="sig(s.symbol) && !sig(s.symbol).error">
+ <div class="mb-2 flex flex-wrap items-center gap-2 rounded-md bg-[var(--bg)] px-2.5 py-1.5 text-[10px] num">
+ <span class="pill text-[9px] font-bold" :class="sig(s.symbol).verdict==='GREEN'?'bg-gain-100 text-gain-700':sig(s.symbol).verdict==='YELLOW'?'bg-warn-100 text-warn-700':sig(s.symbol).verdict==='REJECT'?'bg-loss-200 text-loss-800':'bg-loss-100 text-loss-700'" x-text="sig(s.symbol).verdict==='REJECT'?'⛔ DON\'T SELL':'CALL '+sig(s.symbol).verdict"></span>
+ <span class="text-[var(--text-3)]">trend <b :class="(sig(s.symbol).trend_state||'').includes('bull')?'text-loss-600':(sig(s.symbol).trend_state||'').includes('bear')?'text-gain-600':''" x-text="sig(s.symbol).trend_state"></b></span>
+ <span class="text-[var(--text-3)]">RSI <b x-text="Math.round(sig(s.symbol).rsi_d||0)+'/'+Math.round(sig(s.symbol).rsi_w||0)"></b></span>
+ <span class="text-[var(--text-3)]">MACD <b x-text="(sig(s.symbol).macd_d_state||'').replace(/_/g,' ')"></b></span>
+ <span class="text-[var(--text-3)]" x-show="sig(s.symbol).breakout_state && sig(s.symbol).breakout_state!=='none'">breakout <b class="text-loss-600" x-text="sig(s.symbol).breakout_state"></b></span>
+ <span class="text-[var(--text-3)]" x-show="sig(s.symbol).reasons?.length" x-text="'· '+sig(s.symbol).reasons.slice(0,2).join('; ')"></span>
+ </div>
+ </template>
+ <div x-show="eligLoading && !sig(s.symbol)" class="mb-2 text-[10px] text-[var(--text-3)]">scanning RSI/MACD/trend…</div>
+ <div x-show="sig(s.symbol)?.error" class="mb-2 text-[10px] text-[var(--text-3)]">technicals unavailable (<span x-text="sig(s.symbol)?.error"></span>) — Kite login needed for candles</div>
+ <!-- trades already taken against this holding (strikes detail) -->
+ <div x-show="soldFor(s.symbol).length" class="mb-2 rounded-md bg-[var(--bg)] p-2">
+ <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold mb-1">Open calls &amp; puts sold against this holding <span class="font-normal normal-case">— all open months; square off if worthless, watch if near ITM</span></div>
+ <!-- grouped by expiry month so 2-month positions (e.g. Jun + Jul) both show -->
+ <template x-for="grp in soldByMonth(s.symbol)" :key="grp.month">
+ <div class="mb-1 last:mb-0">
+ <div class="text-[9px] font-bold text-[var(--text-2)] num" x-text="grp.month"></div>
+ <div class="flex flex-col gap-0.5 pl-1">
+ <template x-for="(l,i) in grp.legs" :key="i">
+ <div class="flex items-center gap-1.5 text-[10px] num">
+ <span class="pill" :class="l.side==='PE'?'bg-accent-50 text-accent-700':l.level==='RED'?'bg-loss-100 text-loss-700':l.level==='ORANGE'?'bg-warn-100 text-warn-700':'bg-gain-100 text-gain-700'">
+ <b x-text="l.side"></b> <span x-text="l.strike"></span> · <span x-text="Math.abs(l.qty||0).toLocaleString('en-IN')"></span> @₹<span x-text="l.sold_premium"></span><span x-show="l.current_premium!=null" class="text-[var(--text-3)]"> → ₹<span x-text="l.current_premium"></span></span>
+ </span>
+ <span class="font-semibold" :class="priorStatus(l).cls" x-text="priorStatus(l).txt"></span>
+ </div>
+ </template>
+ </div>
+ </div>
+ </template>
+ </div>
+ <div class="overflow-x-auto"><table class="data-table">
+ <thead><tr><th>Bucket</th><th class="text-right">Dist</th><th class="text-right">Strike</th><th class="text-right">Yield floor</th><th>Eligibility</th><th class="text-right">Premium</th><th class="text-right">Yield/mo</th><th class="text-right">Yield/cr·mo</th><th class="text-right">Margin/cr</th><th>Verdict</th></tr></thead>
+ <tbody>
+ <template x-for="(b,i) in s.buckets" :key="i"><tr>
+ <td class="font-semibold" x-text="b.bucket"></td>
+ <td class="num text-right" x-text="b.distance_pct+'%'"></td>
+ <td class="num text-right font-semibold" x-text="b.strike"></td>
+ <td class="num text-right text-[var(--text-3)]" x-text="b.yield_floor_pm+'%'"></td>
+ <td><span class="pill text-[9px]" :class="effElig(b,s.symbol)==='GREEN'?'bg-gain-100 text-gain-700':effElig(b,s.symbol)==='YELLOW'?'bg-warn-100 text-warn-700':'bg-loss-100 text-loss-700'" x-text="effElig(b,s.symbol)"></span>
+ <span class="text-[9px] text-[var(--text-3)]" x-show="b.reasons?.length" x-text="b.reasons.join(', ')"></span></td>
+ <td><input x-model.number="b._prem" type="number" step="0.5" placeholder="₹" class="num text-[11px] border border-[var(--border)] rounded px-1.5 py-0.5 w-16"></td>
+ <td class="num text-right font-semibold" :class="ymd(b,s)!=null && ymd(b,s)>=b.yield_floor_pm?'text-gain-600':''" x-text="ymd(b,s)!=null?(ymd(b,s)+'%'):'—'"></td>
+ <td class="num text-right font-semibold" :class="ymd(b,s)!=null && ymd(b,s)>=b.yield_floor_pm?'text-gain-600':''" x-text="yieldCr(b,s)!=null?money(yieldCr(b,s)):'—'"></td>
+ <td class="num text-right text-[var(--text-3)]" x-text="marginCr(b,s)!=null?money(marginCr(b,s)):'—'"></td>
+ <td class="whitespace-nowrap"><span x-show="ymd(b,s)!=null" class="pill text-[9px]" :class="ymd(b,s)>=b.yield_floor_pm && effElig(b,s.symbol)!=='RED'?'bg-gain-100 text-gain-700':'bg-[var(--bg)] text-[var(--text-3)]'" x-text="ymd(b,s)>=b.yield_floor_pm && effElig(b,s.symbol)!=='RED'?'✓ SELL':'wait'"></span>
+ <button @click="openApprove(s,b)" class="text-[10px] font-semibold px-2 py-0.5 rounded-md border border-accent-200 text-accent-700 hover:bg-accent-50 ml-1">Approve →</button></td>
+ </tr></template>
+ </tbody>
+ </table></div>
+ </div>
+ </template>
+ <div x-show="!sug.length" class="card p-8 text-center text-[var(--text-3)] text-[12px]">No uncovered holdings — everything's covered, or no holdings parsed.</div>
+ </div>
+ <div class="text-[10px] text-[var(--text-3)]">DEEP floor 1.2%/mo · MID floor 3.5%/mo. <b>Live</b> RSI/MACD/trend/breakout eligibility per name (from Kite daily candles) gates each strike — a REJECT/RED technical read downgrades the strike flag and blocks ✓SELL. <span x-show="eligAt" x-text="'· scanned '+eligAt"></span></div>
+ </div>
+
+ <!-- MONITORING: per-underlying sold strikes + RGB -->
+ <div x-show="tab==='mon'" class="space-y-3">
+ <div class="flex items-center gap-3 text-[12px]">
+ <span class="pill bg-loss-100 text-loss-700" x-text="(mon.summary?.red||0)+' RED'"></span>
+ <span class="pill bg-warn-100 text-warn-700" x-text="(mon.summary?.orange||0)+' ORANGE'"></span>
+ <span class="pill bg-gain-100 text-gain-700" x-text="(mon.summary?.green||0)+' OK'"></span>
+ <span class="text-[var(--text-3)] ml-auto">Rules: premium ≥ sold → orange, ≥2× → red · spot within 5% of strike → orange, 3% → red</span>
+ </div>
+ <div class="space-y-2">
+ <template x-for="u in mon.underlyings||[]" :key="u.underlying">
+ <div class="card p-0 overflow-hidden">
+ <div class="flex items-center justify-between px-4 py-2.5 cursor-pointer hover:bg-[var(--bg)]" @click="exp = exp===u.underlying?null:u.underlying">
+ <div class="flex items-center gap-2">
+ <span class="w-2.5 h-2.5 rounded-full" :class="u.worst==='RED'?'bg-loss-500':u.worst==='ORANGE'?'bg-warn-500':'bg-gain-500'"></span>
+ <span class="font-bold text-[13px]" x-text="u.underlying"></span>
+ <span class="text-[11px] text-[var(--text-3)] num" x-text="u.spot?('spot ₹'+u.spot.toLocaleString('en-IN')):''"></span>
+ <span class="tag" x-text="u.legs.length+' sold'"></span>
+ <span x-show="u.multi_expiry" class="pill text-[9px] bg-warn-100 text-warn-700">2-month</span>
+ <template x-for="(e,ei) in (u.expiries||[])" :key="ei">
+ <span x-show="u.multi_expiry" class="pill text-[9px]" :class="e.worst==='RED'?'bg-loss-100 text-loss-700':e.worst==='ORANGE'?'bg-warn-100 text-warn-700':'bg-gain-100 text-gain-700'"><span x-text="e.expiry"></span> · <span x-text="e.n"></span></span>
+ </template>
+ </div>
+ <span class="text-[10px] text-[var(--text-3)]" x-text="exp===u.underlying?'▲':'▼'"></span>
+ </div>
+ <div x-show="exp===u.underlying" class="overflow-x-auto border-t border-[var(--border)]">
+ <table class="data-table">
+ <thead><tr><th>Expiry</th><th>Strike</th><th>Side</th><th class="text-right">Qty</th><th class="text-right">Sold ₹</th><th class="text-right">Now ₹</th><th class="text-right">Dist to strike</th><th>Status</th><th>Exit when</th><th></th></tr></thead>
+ <tbody>
+ <template x-for="(l,i) in u.legs" :key="i"><tr :class="i>0 && u.legs[i-1].expiry!==l.expiry ? 'border-t-2 border-[var(--border)]' : ''">
+ <td class="text-[11px]" :class="l.expiry?'text-[var(--text-2)] font-semibold':'text-[var(--text-3)]'" x-text="l.expiry||'—'"></td>
+ <td class="num font-semibold" x-text="l.strike"></td>
+ <td x-text="l.side"></td>
+ <td class="num text-right" x-text="(Math.abs(l.qty||0)).toLocaleString('en-IN')"></td>
+ <td class="num text-right" x-text="l.sold_premium ?? '—'"></td>
+ <td class="num text-right" x-text="l.current_premium ?? '—'"></td>
+ <td class="num text-right" :class="(l.dist_to_strike_pct??99)<=3?'text-loss-600':(l.dist_to_strike_pct??99)<=5?'text-warn-600':''" x-text="l.dist_to_strike_pct!=null?(l.dist_to_strike_pct+'%'):'—'"></td>
+ <td><span class="pill text-[9px]" :class="l.level==='RED'?'bg-loss-100 text-loss-700':l.level==='ORANGE'?'bg-warn-100 text-warn-700':'bg-gain-100 text-gain-700'" x-text="l.profit_take?'✓ TAKE PROFIT':l.level"></span>
+ <span x-show="l.captured_pct!=null" class="text-[9px] text-[var(--text-3)]" x-text="l.captured_pct+'% captured'"></span></td>
+ <td class="num text-[10px] text-[var(--text-3)]">
+ <span x-show="l.orange_at">spot <span x-text="l.side==='CE'?'≥':'≤'"></span> <span x-text="l.orange_at.toLocaleString('en-IN')"></span> · <span x-text="l.red_at.toLocaleString('en-IN')"></span></span>
+ <span x-show="l.premium_orange_at"> · prem ≥ <span x-text="l.premium_orange_at"></span> · <span x-text="l.premium_red_at"></span></span>
+ </td>
+ <td><button x-show="l.side==='CE' && (l.level==='ORANGE'||l.level==='RED')" @click="openRoll(u, l)"
+   class="text-[10px] px-2 py-0.5 rounded-md border font-semibold"
+   :class="l.level==='RED'?'border-loss-300 text-loss-700 hover:bg-loss-50':'border-warn-300 text-warn-700 hover:bg-warn-50'">Roll →</button></td>
+ </tr></template>
+ </tbody>
+ </table>
+ </div>
+ </div>
+ </template>
+ <div x-show="!(mon.underlyings||[]).length" class="card p-8 text-center text-[var(--text-3)] text-[12px]">No sold positions found in the S1 sheet of the workbook.</div>
+ </div>
+ </div>
+
+ <!-- portfolio summary -->
+ <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+ <div class="card p-4"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Book value</div>
+ <div class="num text-[20px] font-bold" x-text="cr(s().total_value)"></div><div class="text-[10px] text-[var(--text-3)]" x-text="(s().n_stocks||0)+' stocks'"></div></div>
+ <div class="card p-4"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Coverage</div>
+ <div class="num text-[20px] font-bold" :class="cov()>=90?'text-gain-600':cov()>=60?'text-warn-600':'text-loss-600'" x-text="s().coverage_pct!=null?(s().coverage_pct+'%'):'—'"></div>
+ <div class="mt-1 h-1.5 rounded bg-[var(--bg)] overflow-hidden"><div class="h-full" :class="cov()>=90?'bg-gain-500':cov()>=60?'bg-warn-500':'bg-loss-500'" :style="'width:'+Math.min(100,cov())+'%'"></div></div></div>
+ <div class="card p-4"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">CE sold</div>
+ <div class="num text-[20px] font-bold" x-text="(s().ce_sold_qty||0).toLocaleString('en-IN')"></div><div class="text-[10px] text-[var(--text-3)]">qty</div></div>
+ <div class="card p-4"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Uncovered</div>
+ <div class="num text-[20px] font-bold text-warn-600" x-text="(s().uncovered_qty||0).toLocaleString('en-IN')"></div><div class="text-[10px] text-[var(--text-3)]">qty available to sell</div></div>
+ <div class="card p-4"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Premium collected</div>
+ <div class="num text-[20px] font-bold text-gain-600" x-text="money(totalPrem())"></div><div class="text-[10px] text-[var(--text-3)]">live journal (CC)</div></div>
+ </div>
+
+ <!-- holdings cards -->
+ <div x-show="tab==='cover'">
+ <!-- Action bar — data-first; entry lives behind a button + bulk import -->
+ <div class="flex items-center gap-2 mb-3 flex-wrap">
+ <button @click="openHM()" class="btn-primary !py-1.5">+ Add holding</button>
+ <label class="btn !py-1.5 cursor-pointer">Bulk import (CSV/Excel)<input type="file" accept=".csv,.xlsx,.xls" class="hidden" @change="uploadHoldings($event)"></label>
+ <a href="/import" class="text-[11px] text-[var(--blue)] font-semibold hover:underline">import templates ↗</a>
+ <span class="text-[11px] ml-1" x-text="upStatus"></span>
+ </div>
+
+ <!-- Add / Edit holding modal -->
+ <div x-show="showHM" x-cloak class="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-3" @click.self="showHM=false">
+ <div class="bg-[var(--surface)] rounded-2xl p-5 w-[95vw] max-w-[700px] max-h-[88vh] overflow-y-auto shadow-2xl space-y-3">
+ <div class="text-[14px] font-bold" x-text="hm.symbol?('Edit '+hm.symbol):'Add holding for investment'"></div>
+ <div class="text-[11px] text-[var(--text-3)]">Equity &amp; futures captured separately. Google Sheet overrides manual when synced.</div>
+ <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-[12px] items-end">
+ <label class="space-y-0.5"><span class="builder-head">Underlying</span><input x-model="hm.symbol" placeholder="e.g. RELIANCE" class="num w-full border border-[var(--border)] rounded px-2 py-1 uppercase"></label>
+ <label class="space-y-0.5"><span class="builder-head">Lot size</span><input x-model.number="hm.lot" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+ <label class="space-y-0.5"><span class="builder-head">Current ₹</span><input x-model.number="hm.current" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+ <label class="space-y-0.5"><span class="builder-head">52wH ₹</span><input x-model.number="hm.high52" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+ </div>
+ <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+ <div class="rounded-md border border-[var(--border)] p-2.5 space-y-1.5">
+ <div class="text-[10px] uppercase font-semibold text-accent-700">Equity holding</div>
+ <div class="grid grid-cols-2 gap-2 text-[12px]">
+ <label class="space-y-0.5"><span class="builder-head">Equity qty</span><input x-model.number="hm.equity_qty" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+ <label class="space-y-0.5"><span class="builder-head">Avg buy ₹</span><input x-model.number="hm.equity_avg" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+ </div>
+ </div>
+ <div class="rounded-md border border-[var(--border)] p-2.5 space-y-1.5">
+ <div class="text-[10px] uppercase font-semibold text-accent-700">Futures holding</div>
+ <div class="grid grid-cols-2 gap-2 text-[12px]">
+ <label class="space-y-0.5"><span class="builder-head">Futures qty</span><input x-model.number="hm.futures_qty" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+ <label class="space-y-0.5"><span class="builder-head">Avg buy ₹</span><input x-model.number="hm.futures_avg" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+ </div>
+ </div>
+ </div>
+ <label class="space-y-0.5 block max-w-[220px] text-[12px]"><span class="builder-head">CE sold qty (optional)</span><input x-model.number="hm.ce_sold_qty" type="number" placeholder="auto from trades" class="num w-full border border-[var(--border)] rounded px-2 py-1"></label>
+ <div class="flex justify-end gap-2 items-center pt-1">
+ <span class="text-[11px] mr-auto" x-text="hmStatus"></span>
+ <button @click="showHM=false" class="btn">Cancel</button>
+ <button @click="saveHolding()" class="btn-primary">Save holding</button>
+ </div>
+ </div>
+ </div>
+ <div class="flex items-center justify-between mb-2">
+ <div class="text-[12px] uppercase tracking-wider text-[var(--text-3)] font-semibold">Holdings &amp; coverage</div>
+ <input x-model="q" placeholder="search stock…" class="text-[11px] border border-[var(--border)] rounded-md px-2 py-1 w-36">
+ </div>
+ <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+ <template x-for="h in filtered()" :key="h.symbol">
+ <div class="card p-4">
+ <div class="flex items-center justify-between">
+ <div><div class="font-bold text-[13px] cursor-pointer hover:text-[var(--blue)] flex items-center gap-1" @click="openUnderlying(h.symbol)" title="See the whole picture — options/futures/equity by strategy"><span x-text="h.symbol"></span><span class="text-[9px] text-[var(--text-3)]">▸</span></div><div class="text-[10px] text-[var(--text-3)] truncate" x-text="h.name"></div></div>
+ <div class="text-right"><div class="num text-[13px] font-semibold" x-text="h.current?('₹'+h.current.toLocaleString('en-IN')):'—'"></div>
+ <div class="text-[10px]" :class="(h.pct_off_high??0)>-3?'text-loss-600':'text-[var(--text-3)]'" x-text="h.pct_off_high!=null?(h.pct_off_high+'% off 52wH'):''"></div></div>
+ </div>
+ <!-- coverage bar -->
+ <div class="mt-2">
+ <div class="flex justify-between text-[10px] text-[var(--text-3)] num"><span>held <b x-text="(h.total_qty||0).toLocaleString('en-IN')"></b></span><span>sold <b x-text="(h.ce_sold_qty||0).toLocaleString('en-IN')"></b> · <b :class="h.coverage_pct>=90?'text-gain-600':h.coverage_pct>=60?'text-warn-600':'text-loss-600'" x-text="(h.coverage_pct||0)+'%'"></b></span></div>
+ <div class="mt-1 h-2 rounded bg-[var(--bg)] overflow-hidden"><div class="h-full" :class="h.coverage_pct>=90?'bg-gain-500':h.coverage_pct>=60?'bg-warn-500':'bg-loss-500'" :style="'width:'+Math.min(100,h.coverage_pct||0)+'%'"></div></div>
+ <div class="grid grid-cols-2 gap-1.5 mt-1.5">
+ <div class="rounded bg-[var(--bg)] px-2 py-1"><div class="text-[9px] uppercase text-[var(--text-3)]">Equity</div><div class="num text-[11px] font-semibold"><span x-text="(h.equity_qty||0).toLocaleString('en-IN')"></span><span class="text-[9px] text-[var(--text-3)] font-normal" x-show="h.equity_avg"> @<span x-text="h.equity_avg"></span></span></div></div>
+ <div class="rounded bg-[var(--bg)] px-2 py-1"><div class="text-[9px] uppercase text-[var(--text-3)]">Futures</div><div class="num text-[11px] font-semibold"><span x-text="(h.futures_qty||0).toLocaleString('en-IN')"></span><span class="text-[9px] text-[var(--text-3)] font-normal" x-show="h.futures_avg"> @<span x-text="h.futures_avg"></span></span></div></div>
+ </div>
+ <div class="text-[10px] num mt-1" x-show="h.uncovered_qty>0"><span class="text-warn-600"><b x-text="(h.uncovered_qty||0).toLocaleString('en-IN')"></b> uncovered</span></div>
+ </div>
+ <div class="flex items-center justify-between mt-2">
+ <div class="text-[11px] num text-[var(--text-3)]"><span x-show="h.premium_collected">prem <b class="text-gain-600" x-text="money(h.premium_collected)"></b></span></div>
+ <div class="flex items-center gap-2">
+ <button @click="editHolding(h)" class="text-[11px] text-[var(--text-3)] hover:text-[var(--text-1)]" title="Edit qty"></button>
+ <span x-show="h.source && h.source!=='excel'" class="text-[9px] px-1 rounded bg-accent-50 text-accent-700" x-text="h.source==='manual'?'manual':'edited'"></span>
+ <button @click="analyze(h)" class="text-[11px] px-2.5 py-1 rounded-md border border-accent-200 text-accent-700 hover:bg-accent-50">Find sell levels →</button>
+ </div>
+ </div>
+ </div>
+ </template>
+ </div>
+ <div x-show="!filtered().length" class="card p-8 text-center text-[var(--text-3)] text-[12px]">No holdings parsed from the Selling Plan sheet.</div>
+ </div>
+
+ <!-- CONSOLIDATED: whole book in one screen -->
+ <div x-show="tab==='cons'" class="space-y-3">
+ <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-3">
+ <div class="card p-3"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Holding value</div><div class="num text-[18px] font-bold" x-text="cr(consol().eqVal)"></div><div class="text-[9px] text-[var(--text-3)]">equity</div></div>
+ <div class="card p-3"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Futures value</div><div class="num text-[18px] font-bold" x-text="cr(consol().futVal)"></div></div>
+ <div class="card p-3"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Total held value</div><div class="num text-[18px] font-bold" x-text="cr(consol().totVal)"></div></div>
+ <div class="card p-3"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Coverage</div><div class="num text-[18px] font-bold" :class="consol().cov>=90?'text-gain-600':consol().cov>=60?'text-warn-600':'text-loss-600'" x-text="consol().cov+'%'"></div></div>
+ <div class="card p-3"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Uncovered value</div><div class="num text-[18px] font-bold text-warn-600" x-text="cr(consol().uncVal)"></div></div>
+ <div class="card p-3"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Premium collected</div><div class="num text-[18px] font-bold text-gain-600" x-text="money(totalPrem())"></div></div>
+ </div>
+ <div class="card p-4">
+ <div class="text-[11px] uppercase tracking-wider text-[var(--text-3)] font-semibold mb-2">Coverage by stock</div>
+ <div class="space-y-2">
+ <template x-for="h in consolRows()" :key="h.symbol">
+ <div>
+ <div class="flex justify-between text-[12px] mb-0.5"><span class="font-semibold" x-text="h.symbol"></span>
+ <span class="text-[var(--text-3)] num"><span x-text="(h.coverage_pct||0)+'% covered'"></span> · held <span x-text="(h.total_qty||0).toLocaleString('en-IN')"></span> · <span x-text="cr(h.value)"></span></span></div>
+ <div class="h-2 rounded bg-[var(--bg)] overflow-hidden"><div class="h-full" :class="h.coverage_pct>=90?'bg-gain-500':h.coverage_pct>=60?'bg-warn-500':h.coverage_pct>0?'bg-loss-500':'bg-[var(--text-3)]'" :style="'width:'+Math.max(2,Math.min(100,h.coverage_pct||0))+'%'"></div></div>
+ </div>
+ </template>
+ </div>
+ <div x-show="!consolRows().length" class="p-6 text-center text-[var(--text-3)] text-[12px]">No holdings yet — add them in the Holdings tab.</div>
+ </div>
+
+ <!-- Held vs sold + assignment-aware status -->
+ <div class="card p-0 overflow-hidden">
+ <div class="flex items-center justify-between px-4 py-3 border-b border-[var(--border)]">
+ <div class="text-[12px] font-bold">Held vs sold · assignment status <span class="font-normal text-[var(--text-3)]">· effective strike from rolls · net P&L vs original & month-start (<span x-text="con.month"></span>)</span></div>
+ <div class="flex items-center gap-2 text-[11px]">
+ <span class="tag" x-text="(con.totals?.itm_count||0)+' ITM'"></span>
+ <button @click="captureNotional()" class="btn !py-0.5" title="Snapshot month-start prices from Kite">Capture month-start</button>
+ <span x-text="conStatus"></span>
+ </div>
+ </div>
+ <div class="overflow-x-auto">
+ <table class="data-table">
+ <thead><tr><th>Stock</th><th class="text-right">Held</th><th class="text-right">CE sold</th><th class="text-right">PE sold</th><th class="text-right">Uncov</th><th class="text-right">Cov</th><th class="text-right">Spot</th><th class="text-right">Strike → eff</th><th class="text-right">Underlying P&L</th><th class="text-right">CE leg P&L</th><th class="text-right bg-[var(--bg)]">Net</th><th class="text-right">Assign P&L (orig)</th><th class="text-right">Assign P&L (month)</th></tr></thead>
+ <tbody>
+ <template x-for="r in con.rows||[]" :key="r.symbol"><tr :class="r.itm && 'bg-warn-50'">
+ <td class="font-semibold"><span x-text="r.symbol"></span><span x-show="r.itm" class="pill text-[9px] bg-warn-100 text-warn-700 ml-1">ITM</span></td>
+ <td class="num text-right" x-text="(r.held_qty||0).toLocaleString('en-IN')"></td>
+ <td class="num text-right" x-text="(r.ce_sold_qty||0).toLocaleString('en-IN')"></td>
+ <td class="num text-right text-[var(--text-3)]" x-text="r.pe_sold_qty?(r.pe_sold_qty).toLocaleString('en-IN'):'—'"></td>
+ <td class="num text-right" :class="(r.uncovered_qty||0)>0?'text-warn-600':''" x-text="r.uncovered_qty!=null?(r.uncovered_qty).toLocaleString('en-IN'):'—'"></td>
+ <td class="num text-right" x-text="r.coverage_pct!=null?(r.coverage_pct+'%'):'—'"></td>
+ <td class="num text-right" x-text="r.spot?r.spot.toLocaleString('en-IN'):'—'"></td>
+ <td class="num text-right"><span x-text="r.nominal_strike||'—'"></span><span x-show="r.effective_strike && r.effective_strike!=r.nominal_strike" class="text-accent-600"> → <span x-text="r.effective_strike"></span></span></td>
+ <td class="num text-right" :class="(r.underlying_pnl??0)>=0?'text-gain-600':'text-loss-600'" x-text="r.underlying_pnl!=null?money(r.underlying_pnl):'—'"></td>
+ <td class="num text-right" :class="(r.ce_leg_pnl??0)>=0?'text-gain-600':'text-loss-600'" x-text="r.ce_leg_pnl!=null?money(r.ce_leg_pnl):'—'"></td>
+ <td class="num text-right font-bold bg-[var(--bg)]" :class="(r.net_pnl??0)>=0?'text-gain-600':'text-loss-600'" x-text="r.net_pnl!=null?money(r.net_pnl):'—'"></td>
+ <td class="num text-right" :class="(r.assign_pnl_original??0)>=0?'text-gain-600':'text-loss-600'" x-text="r.assign_pnl_original!=null?money(r.assign_pnl_original):'—'"></td>
+ <td class="num text-right" :class="(r.assign_pnl_notional??0)>=0?'text-gain-600':'text-loss-600'" x-text="r.assign_pnl_notional!=null?money(r.assign_pnl_notional):'—'"></td>
+ </tr></template>
+ </tbody>
+ <tfoot><tr class="total">
+ <td>Total</td>
+ <td class="num text-right" x-text="(con.totals?.held||0).toLocaleString('en-IN')"></td>
+ <td class="num text-right" x-text="(con.totals?.ce_sold||0).toLocaleString('en-IN')"></td>
+ <td class="num text-right text-[var(--text-3)]" x-text="(con.totals?.pe_sold||0).toLocaleString('en-IN')"></td>
+ <td class="num text-right" x-text="(con.totals?.uncovered||0).toLocaleString('en-IN')"></td>
+ <td colspan="3"></td>
+ <td class="num text-right" :class="(con.totals?.underlying_pnl??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(con.totals?.underlying_pnl)"></td>
+ <td class="num text-right" :class="(con.totals?.ce_leg_pnl??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(con.totals?.ce_leg_pnl)"></td>
+ <td class="num text-right font-bold bg-[var(--bg)]" :class="(con.totals?.net_pnl??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(con.totals?.net_pnl)"></td>
+ <td class="num text-right" :class="(con.totals?.assign_pnl_orig??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(con.totals?.assign_pnl_orig)"></td>
+ <td class="num text-right" :class="(con.totals?.assign_pnl_notional??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(con.totals?.assign_pnl_notional)"></td>
+ </tr></tfoot>
+ </table>
+ </div>
+ <div class="text-[10px] text-[var(--text-3)] px-4 py-2"><b class="text-[var(--text-1)]">Net</b> = Underlying P&L + CE leg P&L — the real outcome: a CE gone ITM shows a loss (CE leg P&L) but the future/equity it's written against has gained (Underlying P&L); netting them shows whether the covered call is actually winning. Underlying P&L = (spot − cost basis) × held; CE leg P&L = net premium − intrinsic owed if ITM. Assign P&L = (effective strike − basis) × CE qty, the outcome if assigned. PE sold shown separate.</div>
+ </div>
+ </div>
+
+ <!-- PER-STOCK P&L (Stockwise) -->
+ <div x-show="tab==='pnl'">
+ <div class="text-[12px] uppercase tracking-wider text-[var(--text-3)] font-semibold mb-2">Per-underlying P&L (options netted)</div>
+ <div class="card p-0 overflow-x-auto"><table class="data-table">
+ <thead><tr><th>Underlying</th><th class="text-right">Fut qty</th><th class="text-right">CE sold</th><th class="text-right">PE sold</th><th class="text-right">Options net</th><th class="text-right">Net P&L</th><th class="text-right">Margin</th><th class="text-right">% Return</th></tr></thead>
+ <tbody><template x-for="(x,i) in sw" :key="i"><tr>
+ <td class="font-semibold" x-text="x.underlying"></td>
+ <td class="num text-right" x-text="(x.fut_qty||0).toLocaleString('en-IN')"></td>
+ <td class="num text-right" x-text="(x.ce_sold_qty||0).toLocaleString('en-IN')"></td>
+ <td class="num text-right" x-text="(x.pe_sold_qty||0).toLocaleString('en-IN')"></td>
+ <td class="num text-right" x-text="money(x.options_net)"></td>
+ <td class="num text-right font-bold" :class="(x.net_pnl??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(x.net_pnl)"></td>
+ <td class="num text-right" x-text="cr(x.margin)"></td>
+ <td class="num text-right" x-text="x.return_pct!=null?(Math.round(x.return_pct*1000)/1000+'%'):'—'"></td>
+ </tr></template></tbody></table></div>
+ </div>
+
+ <!-- FUTURES M2M (investment, not assigned) -->
+ <div x-show="tab==='fut'">
+ <div class="flex items-center justify-between mb-2">
+ <div class="text-[12px] uppercase tracking-wider text-[var(--text-3)] font-semibold">Futures for investment — M2M <span class="normal-case font-normal text-[var(--text-3)]">(held long, NOT assigned monthly)</span></div>
+ <div class="text-[12px] num">Total M2M <b :class="(fmTot.m2m_total??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(fmTot.m2m_total)"></b> · invested <span x-text="cr(fmTot.invested)"></span></div>
+ </div>
+ <div class="card p-0 overflow-x-auto"><table class="data-table">
+ <thead><tr><th>Symbol</th><th>Broker</th><th>Demat</th><th class="text-right">Qty</th><th class="text-right">Orig buy</th><th class="text-right">Live</th><th class="text-right">M2M</th><th class="text-right">Daily M2M</th><th class="text-right">Margin</th></tr></thead>
+ <tbody><template x-for="(f,i) in fut" :key="i"><tr>
+ <td class="font-semibold num" x-text="f.symbol"></td><td x-text="f.broker"></td><td x-text="f.demat"></td>
+ <td class="num text-right" x-text="(f.qty||0).toLocaleString('en-IN')"></td>
+ <td class="num text-right" x-text="f.orig_buy"></td><td class="num text-right" x-text="f.live"></td>
+ <td class="num text-right font-bold" :class="(f.m2m_total??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(f.m2m_total)"></td>
+ <td class="num text-right" :class="(f.daily_m2m??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(f.daily_m2m)"></td>
+ <td class="num text-right" x-text="cr(f.margin)"></td>
+ </tr></template></tbody></table></div>
+ <div class="text-[10px] text-[var(--text-3)] mt-2">These are the investment futures (vs S2A/S2B futures, which are ITM-assigned monthly). M2M = (live − original buy) × qty.</div>
+ </div>
+
+ <!-- sell-levels analyzer modal — consolidated: levels + TradingView technicals + S1 checklist -->
+ <div x-show="sel" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3" @click.self="sel=null">
+ <div class="bg-[var(--surface)] rounded-xl p-4 sm:p-6 w-[95vw] max-w-[900px] max-h-[90vh] overflow-y-auto shadow-2xl" x-show="sel">
+ <div class="flex items-center justify-between mb-1">
+ <div class="font-bold text-[15px]" x-text="sel?.symbol + ' — covered-call analysis'"></div>
+ <div class="flex items-center gap-3">
+ <a :href="'https://www.tradingview.com/chart/?symbol=NSE:'+(sel?.symbol||'')" target="_blank" class="text-[11px] text-accent-700 underline">Open full chart ↗</a>
+ <button @click="sel=null" class="text-[12px] text-[var(--text-3)]">✕</button>
+ </div>
+ </div>
+ <div class="text-[11px] text-[var(--text-3)] num mb-3">spot ₹<span x-text="sel?.current"></span> · 52wH ₹<span x-text="sel?.high52"></span> · <span x-text="lv?.pct_off_high!=null?(lv.pct_off_high+'% off high'):''"></span> · uncovered <b x-text="(sel?.uncovered_qty||0).toLocaleString('en-IN')"></b></div>
+
+ <!-- S1 selling checklist -->
+ <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3 text-[12px]">
+ <div class="kpi-tile !p-2.5"><div class="lbl">Off 52w high</div><div class="val !text-[15px]" :class="(sel?.pct_off_high??0)<=-10?'text-gain-600':'text-warn-600'" x-text="sel?.pct_off_high!=null?(Math.abs(sel.pct_off_high)+'%'):'—'"></div><div class="text-[9px] text-[var(--text-3)]">S1 wants ≥10% room</div></div>
+ <div class="kpi-tile !p-2.5"><div class="lbl">Deep strike (≥10% OTM)</div><div class="val !text-[15px]" x-text="deepLvl()?deepLvl().strike:'—'"></div><div class="text-[9px] text-[var(--text-3)]" x-text="deepLvl()?(deepLvl().distance_pct+'% OTM'):''"></div></div>
+ <div class="kpi-tile !p-2.5"><div class="lbl">Yield floor</div><div class="val !text-[15px]">1.25%/mo</div><div class="text-[9px] text-[var(--text-3)]">min for S1 deep</div></div>
+ <div class="kpi-tile !p-2.5"><div class="lbl">Technical rating</div><div class="val !text-[13px] text-[var(--text-3)]">see gauge →</div><div class="text-[9px] text-[var(--text-3)]">TradingView, live</div></div>
+ </div>
+
+ <!-- TradingView technical-analysis gauge -->
+ <div class="rounded-md border border-[var(--border)] p-1 mb-3" style="min-height:300px"><div x-ref="tv"></div></div>
+
+ <div class="overflow-x-auto"><table class="data-table">
+ <thead><tr><th>Bucket</th><th class="text-right">Dist</th><th class="text-right">Strike</th><th class="text-right">Margin/lot</th><th>Eligibility</th><th class="text-right">Premium</th><th class="text-right">Yield/mo</th></tr></thead>
+ <tbody>
+ <template x-for="(o,i) in (lv?.levels||[])" :key="i">
+ <tr>
+ <td class="font-semibold" x-text="o.bucket"></td>
+ <td class="num text-right" x-text="o.distance_pct+'%'"></td>
+ <td class="num text-right" x-text="o.strike"></td>
+ <td class="num text-right" x-text="'₹'+(o.margin_per_lot||0).toLocaleString('en-IN')"></td>
+ <td><span class="pill text-[9px]" :class="o.eligibility==='GREEN'?'bg-gain-100 text-gain-700':o.eligibility==='YELLOW'?'bg-warn-100 text-warn-700':'bg-loss-100 text-loss-600'" x-text="o.eligibility"></span>
+ <span class="text-[9px] text-[var(--text-3)]" x-show="o.reasons?.length" x-text="o.reasons.join(', ')"></span></td>
+ <td><input x-model.number="o._prem" type="number" step="0.5" placeholder="₹" class="num text-[11px] border border-[var(--border)] rounded px-1.5 py-0.5 w-16"></td>
+ <td class="num text-right font-semibold" :class="ym(o)>=2?'text-gain-600':''" x-text="ym(o)!=null?(ym(o)+'%'):'—'"></td>
+ </tr>
+ </template>
+ </tbody>
+ </table></div>
+ <div class="text-[10px] text-[var(--text-3)] mt-2">DEEP ≥10% OTM (δ≤0.10, ultra-safe) · MID ≥6% (δ≤0.25). Eligibility flags RED when within 3% of the 52-week high (risky to sell calls). Enter the live premium to see monthly yield. Margin ≈ 18% of notional.</div>
+ </div>
+ </div>
+ <div class="text-[10px] text-[var(--text-3)]">Holdings from your master Excel "Selling Plan" sheet. Live stock option chains + RSI/MACD eligibility (full analyzer) wire in next — the scoring engine is already ported.</div>
+
+ <!-- UNDERLYING drill-down — the whole picture: equity/futures + options by strategy & strike -->
+ <div x-show="showUL" x-cloak class="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-3" @click.self="showUL=false">
+ <div class="bg-[var(--surface)] rounded-2xl p-5 w-[95vw] max-w-[760px] max-h-[88vh] overflow-y-auto shadow-2xl">
+ <div class="flex items-start justify-between mb-3">
+ <div><div class="text-[16px] font-bold" x-text="ul.symbol"></div><div class="text-[11px] text-[var(--text-3)]" x-text="ul.name"></div></div>
+ <button @click="showUL=false" class="text-[var(--text-3)] text-[18px] leading-none">&times;</button>
+ </div>
+ <!-- holdings -->
+ <div class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+ <div class="rounded-lg bg-[var(--bg)] p-2.5"><div class="text-[9px] uppercase text-[var(--text-3)] font-semibold">Equity</div><div class="num text-[14px] font-bold"><span x-text="(ul.equity_qty||0).toLocaleString('en-IN')"></span></div><div class="text-[9px] text-[var(--text-3)] num" x-show="ul.equity_avg">@<span x-text="ul.equity_avg"></span></div></div>
+ <div class="rounded-lg bg-[var(--bg)] p-2.5"><div class="text-[9px] uppercase text-[var(--text-3)] font-semibold">Futures</div><div class="num text-[14px] font-bold"><span x-text="(ul.futures_qty||0).toLocaleString('en-IN')"></span></div><div class="text-[9px] text-[var(--text-3)] num" x-show="ul.futures_avg">@<span x-text="ul.futures_avg"></span></div></div>
+ <div class="rounded-lg bg-[var(--bg)] p-2.5"><div class="text-[9px] uppercase text-[var(--text-3)] font-semibold">CE sold</div><div class="num text-[14px] font-bold" x-text="(ul.ce_sold_qty||0).toLocaleString('en-IN')"></div></div>
+ <div class="rounded-lg bg-[var(--bg)] p-2.5"><div class="text-[9px] uppercase text-[var(--text-3)] font-semibold">Current</div><div class="num text-[14px] font-bold" x-text="ul.current?('₹'+ul.current.toLocaleString('en-IN')):'—'"></div></div>
+ </div>
+ <!-- options/futures by strategy -->
+ <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold mb-1.5">By strategy — options, futures & equity</div>
+ <div class="space-y-2">
+ <template x-for="s in ul.strategies||[]" :key="s.strategy">
+ <div class="rounded-lg border border-[var(--border)] p-2.5">
+ <div class="text-[12px] font-semibold mb-1" x-text="s.strategy"></div>
+ <div class="flex flex-wrap gap-1.5">
+ <template x-for="(l,li) in s.legs" :key="li">
+ <span class="pill num text-[10px]" :class="l.type==='CE'?'bg-warn-100 text-warn-700':l.type==='PE'?'bg-accent-50 text-accent-700':'bg-[var(--bg)] text-[var(--text-2)]'">
+ <b x-text="l.type||'FUT/EQ'"></b> <span x-show="l.strike" x-text="l.strike"></span> · <span x-text="(l.qty||0).toLocaleString('en-IN')"></span>
+ <span class="opacity-70" x-show="l.sell_price"> @<span x-text="l.sell_price"></span></span>
+ <span class="opacity-50 text-[9px]" x-show="l.expiry"> · <span x-text="l.expiry"></span></span>
+ <span class="opacity-50 text-[9px]" x-show="l.demat"> · <span x-text="l.demat"></span></span>
+ </span>
+ </template>
+ </div>
+ </div>
+ </template>
+ <div x-show="!(ul.strategies||[]).length" class="text-[12px] text-[var(--text-3)] py-3 text-center">No option/future legs found for this underlying in the workbook.</div>
+ </div>
+ </div>
+ </div>
+
+ <!-- ROLL decision card modal -->
+ <div x-show="showRoll" x-cloak class="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 p-3" @click.self="showRoll=false">
+ <div class="bg-[var(--surface)] rounded-2xl p-5 w-[95vw] max-w-[680px] max-h-[90vh] overflow-y-auto shadow-2xl">
+ <div class="flex items-start justify-between mb-3">
+ <div><div class="text-[16px] font-bold"><span x-text="roll.symbol"></span> <span class="text-[13px] font-normal text-[var(--text-3)] num">— roll <span x-text="roll.strike"></span>CE</span></div>
+ <div class="text-[11px] text-[var(--text-3)] num" x-show="roll.spot">spot ₹<span x-text="roll.spot?.toLocaleString('en-IN')"></span> · <span x-text="roll.dte"></span>d to expiry · buffer <b :class="roll.buffer_pct<3?'text-loss-600':roll.buffer_pct<5?'text-warn-600':''" x-text="roll.buffer_pct+'%'"></b> · IV <span x-text="roll.iv_pct+'%'"></span> <span class="opacity-60" x-text="'('+(roll.iv_source||'')+')'"></span></div></div>
+ <button @click="showRoll=false" class="text-[var(--text-3)] text-[18px] leading-none">&times;</button>
+ </div>
+ <div x-show="rollLoading" class="py-6 text-center text-[12px] text-[var(--text-3)]">building candidates…</div>
+ <template x-if="!rollLoading && roll.candidates">
+ <div>
+ <div class="rounded-lg bg-[var(--bg)] p-2.5 mb-3 text-[12px] num flex items-center justify-between">
+ <span class="text-[var(--text-3)]">Cost to close now (buy back <span x-text="(roll.qty||0).toLocaleString('en-IN')"></span> @₹<span x-text="roll.current_premium"></span>)</span>
+ <b class="text-loss-600">−₹<span x-text="(roll.cost_to_close||0).toLocaleString('en-IN')"></span></b>
+ </div>
+ <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold mb-1.5">Roll candidates</div>
+ <div class="space-y-2">
+ <template x-for="(c,ci) in roll.candidates" :key="ci">
+ <div class="rounded-lg border border-[var(--border)] p-3">
+ <div class="flex items-center justify-between mb-1">
+ <div class="text-[12px] font-semibold" x-text="c.label"></div>
+ <span class="pill text-[11px] num font-bold" :class="c.net_credit>=0?'bg-gain-100 text-gain-700':'bg-loss-100 text-loss-700'" x-text="(c.net_credit>=0?'+₹':'−₹')+Math.abs(c.net_credit).toLocaleString('en-IN')"></span>
+ </div>
+ <div class="num text-[11px] text-[var(--text-3)] flex flex-wrap gap-x-3 gap-y-0.5">
+ <span><span x-text="c.strike"></span>CE</span>
+ <span>prem ₹<b x-text="c.premium"></b></span>
+ <span>Δ <span x-text="c.delta"></span></span>
+ <span>OTM <b :class="c.otm_pct>=8?'text-gain-600':c.otm_pct<5?'text-warn-600':''" x-text="c.otm_pct+'%'"></b></span>
+ <span x-text="c.dte+'d'"></span>
+ <span x-show="c.lots">≈<span x-text="c.lots"></span> lots</span>
+ </div>
+ </div>
+ </template>
+ </div>
+ <div class="rounded-lg border border-dashed border-[var(--border)] p-3 mt-2">
+ <div class="text-[12px] font-semibold mb-0.5">Hold &amp; watch</div>
+ <div class="text-[11px] text-[var(--text-3)] num" x-text="roll.hold_watch?.note"></div>
+ </div>
+ <div class="text-[9px] text-[var(--text-3)] mt-2" x-text="roll.disclaimer"></div>
+ </div>
+ </template>
+ </div>
+ </div>
+
+ <!-- APPROVE modal — set the limit price, add to today's list -->
+ <div x-show="showAppr" x-cloak class="fixed inset-0 z-[80] flex items-center justify-center bg-black/45 p-3" @click.self="showAppr=false">
+ <div class="bg-[var(--surface)] rounded-2xl p-5 w-[95vw] max-w-[420px] shadow-2xl">
+ <div class="text-[15px] font-bold mb-1">Approve trade</div>
+ <div class="text-[12px] text-[var(--text-3)] num mb-3">SELL <b x-text="apprForm.symbol"></b> <b><span x-text="apprForm.strike"></span><span x-text="apprForm.side"></span></b> <span x-show="apprForm.distance">· <span x-text="apprForm.distance"></span>% OTM</span> · <span x-text="apprForm.month"></span></div>
+ <div class="grid grid-cols-2 gap-3 text-[12px]">
+ <label class="flex flex-col gap-0.5"><span class="text-[var(--text-3)]">Qty</span>
+ <input x-model.number="apprForm.qty" type="number" class="num border border-[var(--border)] rounded-lg px-2 py-1.5"></label>
+ <label class="flex flex-col gap-0.5"><span class="text-[var(--text-3)]">Limit price ₹ <span class="text-[10px]">(blank = market)</span></span>
+ <input x-model.number="apprForm.limit_price" type="number" step="0.05" :placeholder="apprForm.premium_shown?('shown ₹'+apprForm.premium_shown):'₹'" class="num border border-[var(--border)] rounded-lg px-2 py-1.5 font-semibold"></label>
+ </div>
+ <div class="text-[10px] text-[var(--text-3)] mt-1">Shown premium <span class="num" x-text="apprForm.premium_shown?('₹'+apprForm.premium_shown):'—'"></span> — set your own limit if you want it taken at a different price.</div>
+ <div class="flex justify-end gap-2 mt-4">
+ <button @click="showAppr=false" class="text-[12px] px-3 py-1.5 rounded-md border border-[var(--border)]">Cancel</button>
+ <button @click="saveApprove()" class="text-[12px] font-semibold text-white px-4 py-1.5 rounded-md" style="background:var(--blue)">Add to today's list</button>
+ </div>
+ </div>
+ </div>
+</div>
+
+<script>
+function ccInv(){
+ return {
+ d:{holdings:[],summary:{}}, q:'', sel:null, lv:null,
+ tab:'cover', sw:[], fut:[], fmTot:{}, mon:{underlyings:[],summary:{}}, exp:null, sug:[],
+ showUL:false, ul:{symbol:'',strategies:[]},
+ async openUnderlying(sym){ this.ul={symbol:sym,name:'',strategies:[]}; this.showUL=true; try{ this.ul=await fetch('/api/underlying/'+encodeURIComponent(sym)).then(r=>r.json()); }catch(e){} },
+ showRoll:false, roll:{}, rollLoading:false,
+ async openRoll(u, l){
+   this.roll={symbol:u.underlying, strike:l.strike, qty:Math.abs(l.qty||0)}; this.rollLoading=true; this.showRoll=true;
+   const p=new URLSearchParams({strike:l.strike, qty:Math.abs(l.qty||0), premium:(l.current_premium??0), spot:(u.spot||0), expiry:(l.expiry||''), lot:(l.lot||l.lot_size||1)});
+   try{ this.roll=await fetch('/api/cc/roll/'+encodeURIComponent(u.underlying)+'?'+p.toString()).then(r=>r.json()); }catch(e){ this.roll={...this.roll, error:String(e)}; }
+   this.rollLoading=false;
+ },
+ hm:{symbol:'',equity_qty:null,equity_avg:null,futures_qty:null,futures_avg:null,lot:null,ce_sold_qty:null,current:null,high52:null}, hmStatus:'', upStatus:'', showHM:false,
+ openHM(){ this.hm={symbol:'',equity_qty:null,equity_avg:null,futures_qty:null,futures_avg:null,lot:null,ce_sold_qty:null,current:null,high52:null}; this.hmStatus=''; this.showHM=true; },
+ async uploadHoldings(ev){ const f=ev.target.files[0]; if(!f)return; this.upStatus='uploading…'; const fd=new FormData(); fd.append('file',f);
+ try{ const j=await fetch('/api/cc/holdings-upload',{method:'POST',body:fd}).then(r=>r.json());
+ this.upStatus=j.saved!=null?('✓ '+j.saved+' rows'):('✗ '+(j.error||'failed')); if(j.saved){ this.sug=[]; await this.load(); } }catch(e){ this.upStatus='✗ '+e; } ev.target.value=''; },
+ con:{rows:[],totals:{},month:''}, conStatus:'',
+ async loadCon(){ try{ this.con=await fetch('/api/cc/consolidated').then(r=>r.json()); }catch(e){} },
+ async captureNotional(){ this.conStatus='capturing…'; try{ const j=await fetch('/api/cc/notional/capture',{method:'POST'}).then(r=>r.json());
+ const n=Object.keys(j.captured||{}).length; this.conStatus=j.errors&&j.errors.length?('✗ '+j.errors.join(',').slice(0,40)):('✓ '+n+' captured'); if(n)await this.loadCon(); }catch(e){ this.conStatus='✗ '+e; } },
+ consol(){ const hs=this.d.holdings||[]; let eqVal=0,futVal=0,totVal=0,uncVal=0,held=0,sold=0;
+ hs.forEach(h=>{ eqVal+=h.equity_value||0; futVal+=h.futures_value||0; totVal+=h.value||0; held+=h.total_qty||0; sold+=h.ce_sold_qty||0;
+ if((h.uncovered_qty||0)>0 && h.current) uncVal+=h.uncovered_qty*h.current; });
+ return {eqVal,futVal,totVal,uncVal,cov:held?Math.round(sold/held*100):0}; },
+ consolRows(){ return [...(this.d.holdings||[])].sort((a,b)=>(b.value||0)-(a.value||0)); },
+ editHolding(h){ this.hm={symbol:h.symbol, equity_qty:h.equity_qty||null, equity_avg:h.equity_avg||null, futures_qty:h.futures_qty||null, futures_avg:h.futures_avg||null, lot:h.lot||null, ce_sold_qty:h.ce_sold_qty||null, current:h.current||null, high52:h.high52||null}; this.hmStatus=''; this.showHM=true; },
+ async saveHolding(){
+ if(!(this.hm.symbol||'').trim()){ this.hmStatus='✗ underlying required'; return; }
+ this.hmStatus='saving…';
+ try{ const j=await fetch('/api/cc/holdings-manual',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(this.hm)}).then(r=>r.json());
+ if(j.saved){ this.hmStatus='✓ saved'; this.showHM=false; this.sug=[]; await this.load(); await this.loadSug(); }
+ else this.hmStatus='✗ '+(j.error||'failed'); }catch(e){ this.hmStatus='✗ '+e; }
+ },
+ async loadMon(){ try{ this.mon=await fetch('/api/cc/monitor').then(r=>r.json()); }catch(e){} },
+ async loadSug(){ if(this.sug.length)return; try{ const j=await fetch('/api/cc/suggestions').then(r=>r.json()); this.sug=j.suggestions||[]; this.scanEligibility(); }catch(e){} this.loadApprovals(); },
+ // ── approve → daily WhatsApp-ready order list (front of the reconciliation chain) ──
+ apprMonth:'', approvals:[], apprWa:'', showAppr:false, apprForm:{}, apprCopied:false,
+ monthOpts(){ const o=[],d=new Date(); for(let i=0;i<3;i++){ const m=new Date(d.getFullYear(),d.getMonth()+i,1);
+   o.push(m.toLocaleString('en-US',{month:'short'})+'-'+String(m.getFullYear()).slice(2)); } return o; },
+ curMonth(){ return this.apprMonth || this.monthOpts()[0]; },
+ openApprove(s,b){ this.apprForm={symbol:s.symbol, side:'CE', strike:b.strike, bucket:b.bucket, month:this.curMonth(),
+   qty:s.uncovered_qty||null, lots:s.lots_to_cover||null, premium_shown:b._prem||null, limit_price:b._prem||null,
+   strategy:'S1', distance:b.distance_pct}; this.showAppr=true; },
+ async saveApprove(){ if(!this.apprForm.symbol||!this.apprForm.strike)return;
+   try{ await fetch('/api/approvals',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(this.apprForm)}); this.showAppr=false; await this.loadApprovals(); }catch(e){} },
+ async loadApprovals(){ try{ const j=await fetch('/api/approvals?whatsapp=true&date='+(new Date().toISOString().slice(0,10))).then(r=>r.json()); this.approvals=j.orders||[]; this.apprWa=j.whatsapp||''; }catch(e){} },
+ async claimOrder(o){ const p=prompt('Taken at what price? (blank = mark not taken)', o.limit_price||''); if(p===null)return;
+   await fetch('/api/approvals/'+o.id+'/claim',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({price:p||null,taken:!!p})}); await this.loadApprovals(); },
+ async delApprove(o){ await fetch('/api/approvals/'+o.id,{method:'DELETE'}); await this.loadApprovals(); },
+ async copyWa(){ try{ await navigator.clipboard.writeText(this.apprWa); this.apprCopied=true; setTimeout(()=>this.apprCopied=false,1500); }catch(e){} },
+ elig:{}, eligAt:'', eligLoading:false,
+ async scanEligibility(){ this.eligLoading=true; try{ const j=await fetch('/api/cc/eligibility-scan?leg=CE').then(r=>r.json()); this.elig=j.results||{}; this.eligAt=j.computed_at||''; }catch(e){} this.eligLoading=false; },
+ sig(sym){ return this.elig[(sym||'').toUpperCase()]||null; },
+ // technical verdict gates the per-strike flag: REJECT/RED downgrades, GREEN never upgrades a strike-risk RED
+ effElig(b,sym){ const g=this.sig(sym); if(!g||g.error||!g.verdict||g.verdict==='UNKNOWN') return b.eligibility;
+   if(g.verdict==='REJECT'||g.verdict==='RED') return 'RED'; if(g.verdict==='YELLOW'&&b.eligibility==='GREEN') return 'YELLOW'; return b.eligibility; },
+ soldFor(sym){ const u=(this.mon.underlyings||[]).find(x=>(x.underlying||'').toUpperCase()===(sym||'').toUpperCase()); return u?u.legs:[]; },
+ // open sold legs grouped by expiry month (so e.g. Jun + Jul both show), CE then PE, deepest first
+ soldByMonth(sym){ const legs=this.soldFor(sym); const by={};
+   legs.forEach(l=>{ const m=(l.expiry||l.expiry_key||'—'); (by[m]=by[m]||[]).push(l); });
+   return Object.keys(by).sort().map(m=>({month:m, legs:by[m].sort((a,b)=>(a.side===b.side?(a.strike||0)-(b.strike||0):(a.side==='CE'?-1:1)))})); },
+ // S1 selling priority — sell biggest pending positions that are technically safe, first
+ sq:'', sortBy:'priority', sellNowOnly:false,
+ bestYield(s){ let m=null; (s.buckets||[]).forEach(b=>{ const y=this.ymd(b,s); if(y!=null && (m==null||y>m)) m=y; }); return m; },
+ priority(s){ const unc=s.uncovered_qty||0; const v=(this.sig(s.symbol)||{}).verdict;
+   const eligible=(v==='GREEN'||v==='YELLOW'||v==null||v==='UNKNOWN');   // unknown = not yet scanned, don't block
+   let score=unc; if(v==='REJECT'||v==='RED') score=unc*0.05; else if(v==='GREEN') score=unc*1.5;
+   return {score, sellNow:(unc>0 && (v==='GREEN'||v==='YELLOW'))}; },
+ sellNowCount(){ return (this.sug||[]).filter(s=>this.priority(s).sellNow).length; },
+ sortedSug(){ const q=(this.sq||'').toLowerCase().trim();
+   let arr=(this.sug||[]).filter(s=>(!q||(s.symbol||'').toLowerCase().includes(q)) && (!this.sellNowOnly||this.priority(s).sellNow));
+   const by=this.sortBy;
+   if(by==='pending') arr.sort((a,b)=>(b.uncovered_qty||0)-(a.uncovered_qty||0));
+   else if(by==='offhigh') arr.sort((a,b)=>(a.pct_off_high??0)-(b.pct_off_high??0));
+   else if(by==='covered') arr.sort((a,b)=>(a.coverage_pct??100)-(b.coverage_pct??100));
+   else if(by==='yield') arr.sort((a,b)=>(this.bestYield(b)??-1)-(this.bestYield(a)??-1));
+   else arr.sort((a,b)=>this.priority(b).score-this.priority(a).score);   // priority (default)
+   return arr; },
+ // prior-month call verdict (his check: worthless → square off; near ITM → watch)
+ priorStatus(l){
+   const sp=l.sold_premium, cp=l.current_premium;
+   if(l.profit_take || (cp!=null && sp && cp<=0.15*sp)) return {txt:'💸 ~worthless · square off / let expire', cls:'text-gain-600'};
+   if(l.level==='RED') return {txt:'⚠ near ITM · watch / roll', cls:'text-loss-600'};
+   if(l.level==='ORANGE') return {txt:'• watch', cls:'text-warn-600'};
+   return {txt:'✓ safe', cls:'text-[var(--text-3)]'};
+ },
+ ymd(b,s){ if(!b._prem||!b.margin_per_lot) return null; return Math.round(b._prem*(s.lot||1)/b.margin_per_lot*100*100)/100; },
+ // yield per ₹1cr of HOLDING, monthly = (premium / spot) × 1cr  → the take/skip number
+ yieldCr(b,s){ if(!b._prem||!s.current) return null; return Math.round(b._prem/s.current*1e7); },
+ // margin per ₹1cr of exposure (for futures-backed cover) = (margin_per_lot / strike×lot) × 1cr
+ marginCr(b,s){ if(!b.margin_per_lot||!b.strike||!s.lot) return null; return Math.round(b.margin_per_lot/(b.strike*s.lot)*1e7); },
+ async load(){ try{ this.d=await fetch('/api/cc/holdings').then(r=>r.json()); }catch(e){} },
+ async loadSW(){ if(this.sw.length)return; try{ const j=await fetch('/api/cc/stockwise').then(r=>r.json()); this.sw=j.stockwise||[]; }catch(e){} },
+ async loadFut(){ if(this.fut.length)return; try{ const j=await fetch('/api/futures/m2m').then(r=>r.json()); this.fut=j.futures||[]; this.fmTot=j.totals||{}; }catch(e){} },
+ money(v){ if(v==null) return '—'; const s=v<0?'−':'+'; const a=Math.abs(v); if(a>=1e7) return s+'₹'+(a/1e7).toFixed(2)+'Cr'; if(a>=1e5) return s+'₹'+(a/1e5).toFixed(2)+'L'; return s+'₹'+Math.round(a).toLocaleString('en-IN'); },
+ cr(v){ return v? '₹'+(v/1e7).toFixed(2)+'Cr' : '—'; },
+ s(){ return this.d.summary||{}; },
+ cov(){ return this.s().coverage_pct||0; },
+ totalPrem(){ return (this.d.holdings||[]).reduce((a,h)=>a+(h.premium_collected||0),0)||null; },
+ filtered(){ const q=this.q.toLowerCase(); return (this.d.holdings||[]).filter(h=>!q||(h.symbol||'').toLowerCase().includes(q)||(h.name||'').toLowerCase().includes(q)); },
+ async analyze(h){ this.sel=h; this.lv=null;
+ try{ this.lv=await fetch(`/api/cc/levels?current=${h.current||0}&high52=${h.high52||0}&lot=${h.lot||1}`).then(r=>r.json()); }catch(e){}
+ this.$nextTick(()=>this.mountTV(h.symbol)); },
+ deepLvl(){ return (this.lv?.levels||[]).find(o=>(o.bucket||'').toUpperCase().includes('DEEP')) || (this.lv?.levels||[])[0]; },
+ mountTV(sym){ const host=this.$refs.tv; if(!host||!sym) return; host.innerHTML='';
+ const wrap=document.createElement('div'); wrap.className='tradingview-widget-container';
+ const inner=document.createElement('div'); inner.className='tradingview-widget-container__widget'; wrap.appendChild(inner);
+ const sc=document.createElement('script'); sc.type='text/javascript'; sc.async=true;
+ sc.src='https://s3.tradingview.com/external-embedding/embed-widget-technical-analysis.js';
+ sc.text=JSON.stringify({interval:'1D',width:'100%',height:300,symbol:'NSE:'+sym,showIntervalTabs:true,displayMode:'multiple',isTransparent:true,locale:'en',colorTheme:(document.documentElement.classList.contains('dark')?'dark':'light')});
+ wrap.appendChild(sc); host.appendChild(wrap); },
+ ym(o){ if(!o._prem||!o.margin_per_lot) return null; return Math.round(o._prem*1*(this.sel?.lot||1)/o.margin_per_lot*100*100)/100; },
+ };
+}
+</script>
+{% endblock %}

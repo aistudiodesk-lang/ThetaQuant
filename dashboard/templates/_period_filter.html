@@ -1,0 +1,58 @@
+{# Reusable filter bar. Requires the page x-data to spread window.tgPeriod() and to
+   expose a `filterRows` array (the unfiltered source) for facet options.
+   Usage: <div x-data="{...tgPeriod(), get filterRows(){return this.d.positions||[]}, ...}">
+          {% include '_period_filter.html' %} #}
+<div class="card p-2.5 flex flex-wrap items-center gap-2 text-[12px]">
+  <input x-model="fq" placeholder="Search — name, NIFTY, strike…" class="num border border-[var(--border)] rounded-lg px-2.5 py-1.5 text-[12px] flex-1 min-w-[150px]">
+  <span class="w-px h-5 bg-[var(--border)] mx-0.5"></span>
+  <span class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mr-1">Period</span>
+  <div class="inline-flex rounded-lg border border-[var(--border)] overflow-hidden">
+    <template x-for="opt in [['all','All'],['today','Today'],['week','Week'],['month','Month'],['lastmonth','Last mo'],['quarter','Quarter'],['fy','FY']]" :key="opt[0]">
+      <button @click="setPeriodLocal(opt[0])" class="px-2.5 py-1 text-[11px] font-semibold border-r border-[var(--border)] last:border-r-0"
+        :class="period===opt[0]?'bg-[var(--text-1)] text-[var(--surface)]':'text-[var(--text-3)] hover:bg-[var(--bg)]'" x-text="opt[1]"></button>
+    </template>
+    <button @click="setPeriodLocal('custom')" class="px-2.5 py-1 text-[11px] font-semibold"
+      :class="period==='custom'?'bg-[var(--text-1)] text-[var(--surface)]':'text-[var(--text-3)] hover:bg-[var(--bg)]'">Custom</button>
+  </div>
+  <template x-if="period==='custom'">
+    <span class="flex items-center gap-1">
+      <input type="date" x-model="pfrom" class="num border border-[var(--border)] rounded px-1.5 py-1 text-[11px]">
+      <span class="text-[var(--text-3)]">→</span>
+      <input type="date" x-model="pto" class="num border border-[var(--border)] rounded px-1.5 py-1 text-[11px]">
+    </span>
+  </template>
+
+  <span class="w-px h-5 bg-[var(--border)] mx-0.5"></span>
+
+  <!-- by trade date OR by expiry month (all options/futures of that expiry) -->
+  <div class="inline-flex rounded-lg border border-[var(--border)] overflow-hidden text-[11px] font-semibold">
+    <button @click="setBasis('entry')" class="px-2 py-1" :class="basis==='entry'?'bg-[var(--text-1)] text-[var(--surface)]':'text-[var(--text-3)]'" title="Filter by trade date">By date</button>
+    <button @click="setBasis('expiry')" class="px-2 py-1" :class="basis==='expiry'?'bg-[var(--text-1)] text-[var(--surface)]':'text-[var(--text-3)]'" title="Filter by expiry month">By expiry</button>
+  </div>
+  <select x-show="basis==='expiry'" @change="setExpiryLocal($event.target.value)" class="border border-[var(--border)] rounded-lg px-2 py-1 text-[11px] font-semibold">
+    <option value="" :selected="!expirySel">All expiries</option>
+    <template x-for="m in expiryOpts(filterRows)" :key="m.key"><option :value="m.key" :selected="m.key===expirySel" x-text="m.label"></option></template>
+  </select>
+
+  <span class="w-px h-5 bg-[var(--border)] mx-0.5"></span>
+
+  <select x-model="fStatus" class="border border-[var(--border)] rounded-lg px-2 py-1 text-[11px]">
+    <option value="">Any status</option><option value="open">Open</option><option value="closed">Closed</option>
+  </select>
+  <select x-model="fBroker" class="border border-[var(--border)] rounded-lg px-2 py-1 text-[11px]" x-show="facetOpts(filterRows,'broker').length">
+    <option value="">All brokers</option>
+    <template x-for="b in facetOpts(filterRows,'broker')" :key="b"><option :value="b" x-text="b"></option></template>
+  </select>
+  <select x-model="fDemat" class="border border-[var(--border)] rounded-lg px-2 py-1 text-[11px]" x-show="facetOpts(filterRows,'demat').length || facetOpts(filterRows,'client').length">
+    <option value="">All demats</option>
+    <template x-for="dm in (facetOpts(filterRows,'demat').length?facetOpts(filterRows,'demat'):facetOpts(filterRows,'client'))" :key="dm"><option :value="dm" x-text="dm"></option></template>
+  </select>
+
+  <button @click="sortDesc=!sortDesc" class="border border-[var(--border)] rounded-lg px-2 py-1 text-[11px] font-semibold flex items-center gap-1" :title="sortDesc?'Newest first':'Oldest first'">
+    <span x-text="sortDesc?'Newest':'Oldest'"></span>
+    <span x-text="sortDesc?'↓':'↑'"></span>
+  </button>
+
+  <button @click="clearFilters()" x-show="filtersActive()" class="text-[11px] text-[var(--blue)] font-semibold ml-0.5">clear</button>
+  <span class="ml-auto text-[11px] text-[var(--text-3)] num" x-text="(typeof filteredCount!=='undefined'?filteredCount:'')"></span>
+</div>

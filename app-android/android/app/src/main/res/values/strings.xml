@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Theta Quant</string>
+    <string name="title_activity_main">Theta Quant</string>
+    <string name="package_name">com.thetaquant.app</string>
+    <string name="custom_url_scheme">com.thetaquant.app</string>
+</resources>

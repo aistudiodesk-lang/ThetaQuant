@@ -1,0 +1,380 @@
+{% extends "base.html" %}
+{% block title %}Overview · Theta Quant{% endblock %}
+{% block content %}
+<div class="space-y-4" x-data="overview()" x-init="load(); setInterval(()=>load(), 30000)">
+
+  <div class="flex items-end justify-between gap-3">
+    <div>
+      <h1 class="text-xl font-bold tracking-tight">Overview</h1>
+      <div class="text-[12px] text-[var(--text-3)]">Everything across all strategies · <span x-text="d.computed_at?('updated '+d.computed_at):'loading…'"></span></div>
+    </div>
+    <a href="/report-full" class="text-[12px] font-semibold text-white rounded-lg px-4 py-2" style="background:var(--blue)">Full Reporting</a>
+  </div>
+
+  <!-- period filter — drives the reporting range (curve, bars, MTD, period P&L) -->
+  <div class="card p-2.5 flex flex-wrap items-center gap-2 text-[12px]">
+    <span class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mr-1">Period</span>
+    <div class="inline-flex rounded-lg border border-[var(--border)] overflow-hidden">
+      <template x-for="opt in [['all','All'],['fy','FY'],['quarter','Quarter'],['month','Month'],['lastmonth','Last mo'],['week','Week'],['today','Today']]" :key="opt[0]">
+        <button @click="setPeriod(opt[0])" class="px-2.5 py-1 text-[11px] font-semibold border-r border-[var(--border)] last:border-r-0"
+          :class="period===opt[0]?'bg-[var(--text-1)] text-[var(--surface)]':'text-[var(--text-3)] hover:bg-[var(--bg)]'" x-text="opt[1]"></button>
+      </template>
+      <button @click="setPeriod('custom')" class="px-2.5 py-1 text-[11px] font-semibold" :class="period==='custom'?'bg-[var(--text-1)] text-[var(--surface)]':'text-[var(--text-3)] hover:bg-[var(--bg)]'">Custom</button>
+    </div>
+    <template x-if="period==='custom'">
+      <span class="flex items-center gap-1">
+        <input type="date" x-model="pfrom" @change="applyCustom()" class="num border border-[var(--border)] rounded px-1.5 py-1 text-[11px]">
+        <span class="text-[var(--text-3)]">→</span>
+        <input type="date" x-model="pto" @change="applyCustom()" class="num border border-[var(--border)] rounded px-1.5 py-1 text-[11px]">
+      </span>
+    </template>
+    <span class="text-[11px] text-[var(--text-3)] num ml-1" x-show="range.start" x-text="(range.start||'')+' → '+(range.end||'')"></span>
+    <span class="w-px h-4 bg-[var(--border)] mx-1"></span>
+    <span class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">Options · expiry</span>
+    <select x-model="expMonth" class="ovfilt num"><template x-for="m in expiryOpts()" :key="m.key"><option :value="m.key" x-text="m.label"></option></template></select>
+    <span class="ml-auto num text-[12px]">Realized <b x-text="periodLabel()"></b>: <b :class="(periodPnl()??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(periodPnl())"></b></span>
+  </div>
+
+  <!-- ===== Hero + KPI sparkline cards ===== -->
+  <div class="grid grid-cols-1 lg:grid-cols-12 gap-3">
+
+    <!-- Portfolio hero (the one saturated surface) -->
+    <div class="lg:col-span-4 rounded-2xl p-5 text-white relative overflow-hidden"
+         style="background:linear-gradient(135deg,#1b3f80 0%,#2f64d4 100%);box-shadow:0 8px 22px rgba(27,63,128,.28)">
+      <div class="absolute rounded-full" style="right:-30px;top:-30px;width:130px;height:130px;background:rgba(255,255,255,.08)"></div>
+      <div class="absolute rounded-full" style="right:70px;bottom:-60px;width:110px;height:110px;background:rgba(255,255,255,.06)"></div>
+      <div class="text-[9.5px] font-semibold tracking-[0.07em] uppercase relative" style="color:#bcd0f0">Net P&L · all strategies</div>
+      <div class="num text-[30px] font-semibold tracking-tight mt-2 relative" x-text="money(k().pnl)"></div>
+      <div class="flex gap-6 mt-4 relative">
+        <div><div class="text-[9px] tracking-[0.04em] uppercase" style="color:#bcd0f0">Premium</div><div class="num text-[14px] font-semibold mt-0.5" style="color:#8fe3bd" x-text="money(k().premium)"></div></div>
+        <div><div class="text-[9px] tracking-[0.04em] uppercase" style="color:#bcd0f0">Futures M2M</div><div class="num text-[14px] font-semibold mt-0.5" x-text="cr(k().futures_m2m)"></div></div>
+        <div><div class="text-[9px] tracking-[0.04em] uppercase" style="color:#bcd0f0">Open</div><div class="num text-[14px] font-semibold mt-0.5" x-text="(k().n_open||0)+'/'+(k().n_strategies||0)"></div></div>
+      </div>
+    </div>
+
+    <!-- KPI sparkline cards -->
+    <div class="lg:col-span-8 grid grid-cols-2 md:grid-cols-4 gap-3">
+      <template x-for="c in kpiCards()" :key="c.label">
+        <div class="card p-4 flex flex-col justify-between">
+          <div class="flex items-center gap-2">
+            <span class="num inline-flex items-center justify-center w-7 h-7 rounded-lg text-[13px] font-bold" style="background:var(--blue-tint);color:var(--blue)" x-text="c.glyph"></span>
+            <span class="text-[9.5px] uppercase tracking-[0.06em] font-semibold text-[var(--text-3)]" x-text="c.label"></span>
+          </div>
+          <div class="flex items-end justify-between gap-2 mt-3">
+            <div>
+              <div class="num text-[18px] font-semibold leading-none" :class="c.tone" x-text="c.value"></div>
+              <div class="text-[10px] text-[var(--text-3)] num mt-1" x-text="c.sub"></div>
+            </div>
+            <svg x-show="c.spark" viewBox="0 0 90 34" width="80" height="30" preserveAspectRatio="none" class="shrink-0">
+              <path :d="c.sparkFill" :fill="'url(#og'+c.id+')'"></path>
+              <path :d="c.spark" fill="none" :stroke="c.stroke" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"></path>
+              <defs><linearGradient :id="'og'+c.id" x1="0" y1="0" x2="0" y2="1"><stop offset="0" :stop-color="c.stroke" stop-opacity=".2"/><stop offset="1" :stop-color="c.stroke" stop-opacity="0"/></linearGradient></defs>
+            </svg>
+          </div>
+        </div>
+      </template>
+    </div>
+  </div>
+
+  <!-- ===== Strategy-wise summary (the sheet view) — scoped to the selected expiry month ===== -->
+  <div class="card p-0 overflow-hidden">
+    <div class="px-4 py-3 border-b border-[var(--border)] flex items-center justify-between flex-wrap gap-2">
+      <div class="text-[12.5px] font-semibold text-[var(--ink-2)]">Strategy-wise <span class="font-normal text-[var(--text-3)]">· S1–S8 groups · options for <b class="num" x-text="expLabel()"></b> expiry</span></div>
+      <div class="flex items-center gap-2">
+        <div class="inline-flex rounded-md border border-[var(--border)] overflow-hidden text-[10.5px] font-semibold">
+          <template x-for="opt in [{k:'entry',t:'Entry'},{k:'manual',t:'Manual'},{k:'live',t:'Live'}]" :key="opt.k">
+            <button @click="setMarginSrc(opt.k)" class="px-2.5 py-1 border-l border-[var(--border)] first:border-l-0"
+              :class="marginSource===opt.k?'bg-[var(--blue)] text-white':'text-[var(--text-3)]'" x-text="opt.t"
+              :title="opt.k==='entry'?'Margin when trade taken (locked · original yield)':opt.k==='manual'?'Broker M-sheet ledger margin':'Live Kite basket margin'"></button>
+          </template>
+        </div>
+        <div class="text-[10px] text-[var(--text-3)]">click a target cell to set</div>
+      </div>
+    </div>
+    <div class="overflow-x-auto">
+      <table class="data-table">
+        <thead><tr>
+          <th>Strategy</th>
+          <th class="text-right">Max profit</th>
+          <th class="text-right">Current P&L</th>
+          <th class="text-right">Margin <span class="font-normal text-[9px] text-[var(--text-3)]" x-text="'· '+marginSource"></span></th>
+          <th class="text-right">Yield %</th>
+          <th class="text-right">Margin Target</th>
+          <th class="text-right">% used</th>
+        </tr></thead>
+        <tbody>
+          <template x-for="r in stratRows()" :key="r.code">
+            <tr>
+              <td class="font-semibold"><span x-text="r.code"></span> <span class="text-[var(--text-3)] font-normal text-[11px]" x-text="r.label"></span></td>
+              <td class="num text-right text-gain-600" x-text="r.n_open>0 ? money(r.max_profit) : '—'"></td>
+              <td class="num text-right font-semibold" :class="(r.pnl??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(r.pnl)"></td>
+              <td class="num text-right" x-text="cr(r.margin)"></td>
+              <td class="num text-right" x-text="r.yield_pct!=null?(r.yield_pct+'%'):'—'"></td>
+              <td class="num text-right"><input type="number" :value="targets[r.code]??''" @change="saveTarget(r.code,$event.target.value)" placeholder="set…" class="ovtgt num"></td>
+              <td class="num text-right" :class="r.used_pct>100?'text-loss-600':'text-[var(--text-2)]'" x-text="r.used_pct!=null?(r.used_pct+'%'):'—'"></td>
+            </tr>
+          </template>
+          <tr x-show="!stratRows().length"><td colspan="7" class="text-center text-[var(--text-3)] py-6 text-[12px]">No option strategies for this expiry month.</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <!-- total row -->
+    <div class="grid items-center px-4 py-3 text-white num text-right" style="background:var(--slate);grid-template-columns:1.6fr 1fr 1fr 1fr 0.9fr 1fr 0.8fr">
+      <div class="font-semibold text-[12.5px] text-left">Total</div>
+      <div style="color:var(--mint)" x-text="stratTotals().n_open>0 ? money(stratTotals().max_profit) : '—'"></div>
+      <div :style="(stratTotals().pnl??0)>=0?'color:var(--mint)':'color:#f0a39c'" x-text="money(stratTotals().pnl)"></div>
+      <div x-text="cr(stratTotals().margin)"></div>
+      <div x-text="stratTotals().yield_pct!=null?(stratTotals().yield_pct+'%'):'—'"></div>
+      <div x-text="stratTotals().target?cr(stratTotals().target):'—'"></div>
+      <div></div>
+    </div>
+  </div>
+
+  <!-- ===== Equity curve + monthly bars ===== -->
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+    <div class="card p-4 lg:col-span-2">
+      <div class="flex items-center justify-between mb-1">
+        <div class="text-[12.5px] font-semibold text-[var(--ink-2)]">Cumulative realized P&L <span class="font-normal text-[var(--text-3)]">· <span x-text="periodLabel()"></span> (by expiry)</span></div>
+        <div class="num text-[13px] font-semibold" :class="(curve.last??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(curve.last)"></div>
+      </div>
+      <svg viewBox="0 0 560 150" preserveAspectRatio="none" style="width:100%;height:150px;display:block">
+        <defs><linearGradient id="ovArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2f64d4" stop-opacity=".16"/><stop offset="1" stop-color="#2f64d4" stop-opacity="0"/></linearGradient></defs>
+        <line x1="0" y1="40" x2="560" y2="40" stroke="var(--line-soft)" stroke-width="1" vector-effect="non-scaling-stroke"/>
+        <line x1="0" y1="80" x2="560" y2="80" stroke="var(--line-soft)" stroke-width="1" vector-effect="non-scaling-stroke"/>
+        <line x1="0" y1="120" x2="560" y2="120" stroke="var(--line-soft)" stroke-width="1" vector-effect="non-scaling-stroke"/>
+        <path :d="curve.fill" fill="url(#ovArea)"/>
+        <path :d="curve.line" fill="none" stroke="#2f64d4" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+      </svg>
+      <div class="flex justify-between text-[10px] text-[var(--text-3)] num mt-1"><span x-text="curve.from"></span><span x-text="curve.to"></span></div>
+    </div>
+    <div class="card p-4">
+      <div class="text-[12.5px] font-semibold text-[var(--ink-2)] mb-1">Monthly P&L</div>
+      <svg viewBox="0 0 560 150" preserveAspectRatio="none" style="width:100%;height:150px;display:block">
+        <line :x1="0" :x2="560" :y1="bars.zero" :y2="bars.zero" stroke="var(--border)" stroke-width="1" vector-effect="non-scaling-stroke"/>
+        <template x-for="(b,i) in bars.rects" :key="i">
+          <rect :x="b.x" :y="b.y" :width="b.w" :height="b.h" rx="4" :fill="b.pos?'#2f64d4':'#d2463c'"></rect>
+        </template>
+      </svg>
+      <div class="flex justify-between text-[10px] text-[var(--text-3)] num mt-1"><span x-text="bars.first"></span><span x-text="bars.lastM"></span></div>
+    </div>
+  </div>
+
+  <!-- ===== Holdings & coverage (filterable) ===== -->
+  <div class="card p-4">
+    <div class="flex items-center justify-between gap-2 flex-wrap mb-3">
+      <div class="text-[12.5px] font-semibold text-[var(--ink-2)]">Holdings &amp; Investment <span class="font-normal text-[var(--text-3)]">· equity + futures</span></div>
+      <div class="flex items-center gap-1.5 text-[11px]">
+        <select x-model="hgroup" class="ovfilt font-semibold"><option value="">All stocks</option><template x-for="g in Object.keys(groups)" :key="g"><option x-text="g"></option></template></select>
+        <select x-model="hf.strat" class="ovfilt"><option value="">All strategies</option><option value="S1">S1</option><option value="S2A">S2A</option><option value="S2B">S2B</option><option value="NONE">NONE</option></select>
+        <select x-model="hf.type" class="ovfilt"><option value="">Eq + Fut</option><option value="equity">Equity</option><option value="futures">Futures</option></select>
+        <select x-model="hf.purpose" class="ovfilt"><option value="">Inv + Trd</option><option value="investment">Investment</option><option value="trading">Trading</option></select>
+        <a href="/holdings" class="text-[var(--blue)] font-semibold ml-1">open ↗</a>
+      </div>
+    </div>
+    <div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div><div class="ovkl">Book value</div><div class="num text-[17px] font-bold" x-text="cr(hsum.value)"></div><div class="ovks" x-text="hsum.n+' stocks'"></div></div>
+      <div><div class="ovkl">Equity</div><div class="num text-[17px] font-bold" x-text="cr(hsum.equity_value)"></div><div class="ovks" x-text="qty(hsum.equity_qty)+' sh'"></div></div>
+      <div><div class="ovkl">Futures</div><div class="num text-[17px] font-bold" x-text="cr(hsum.futures_value)"></div><div class="ovks" x-text="qty(hsum.futures_qty)+' qty'"></div></div>
+      <div><div class="ovkl">Unrealised</div><div class="num text-[17px] font-bold" :class="(hsum.unrealised??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(hsum.unrealised)"></div><div class="ovks" x-text="hsum.invested?('on '+cr(hsum.invested)):''"></div></div>
+      <div><div class="ovkl">Covered</div><div class="num text-[17px] font-bold text-gain-600" x-text="hsum.covered_pct+'%'"></div><div class="ovks" x-text="qty(hsum.covered_qty)+' sh'"></div></div>
+      <div><div class="ovkl">Uncovered</div><div class="num text-[17px] font-bold" :class="hsum.uncovered_qty?'text-loss-600':''" x-text="qty(hsum.uncovered_qty)"></div><div class="ovks">no call sold</div></div>
+      <div><div class="ovkl">Margin used</div><div class="num text-[17px] font-bold" x-text="cr(bookMargin())"></div><div class="ovks" x-text="bookMarginSub()"></div></div>
+    </div>
+    <!-- stock-group drill: per-stock rows when a group (Adani…) is picked -->
+    <div x-show="hgroup" class="mt-3 overflow-x-auto border-t border-[var(--border)] pt-3">
+      <div class="text-[11px] font-semibold text-[var(--ink-2)] mb-1.5"><span x-text="hgroup"></span> group · <span x-text="groupRows().length"></span> stocks</div>
+      <table class="data-table">
+        <thead><tr><th>Stock</th><th class="text-right">Value</th><th class="text-right">Invested</th><th class="text-right">Unrealised</th><th class="text-right">%</th><th class="text-right">Covered</th></tr></thead>
+        <tbody>
+          <template x-for="g in groupRows()" :key="g.symbol">
+            <tr>
+              <td class="font-semibold" x-text="g.symbol"></td>
+              <td class="num text-right" x-text="cr(g.value)"></td>
+              <td class="num text-right" x-text="cr(g.invested)"></td>
+              <td class="num text-right font-semibold" :class="(g.unrealised??0)>=0?'text-gain-600':'text-loss-600'" x-text="money(g.unrealised)"></td>
+              <td class="num text-right" :class="(g.unrealised_pct??0)>=0?'text-gain-600':'text-loss-600'" x-text="g.unrealised_pct!=null?(g.unrealised_pct+'%'):'—'"></td>
+              <td class="num text-right" x-text="(g.covered_pct??0)+'%'"></td>
+            </tr>
+          </template>
+          <tr x-show="!groupRows().length"><td colspan="6" class="text-center text-[var(--text-3)] py-4 text-[12px]">No holdings in this group.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ===== Bank · entity margins (strategy P&L lives in the S1–S8 table above) ===== -->
+  <div class="card p-4">
+    <div class="flex items-center justify-between mb-2"><div class="text-[11px] uppercase tracking-[0.06em] text-[var(--text-3)] font-semibold">Bank · entity margins</div><a href="/margin" class="text-[11px] text-[var(--text-3)] hover:underline">ledger →</a></div>
+    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-1">
+      <template x-for="[e,v] in Object.entries(d.bank||{})" :key="e">
+        <div class="flex items-center justify-between text-[12px] num"><span class="font-semibold" x-text="e"></span><span class="text-[var(--text-3)]">margin <b x-text="cr(v.margin_total)"></b> · led <b x-text="cr(v.ledger)"></b></span></div>
+      </template>
+      <div x-show="!Object.keys(d.bank||{}).length" class="text-[11px] text-[var(--text-3)]">no bank data</div>
+    </div>
+  </div>
+</div>
+
+<style>
+.ovfilt{border:1px solid var(--border);border-radius:8px;padding:4px 7px;background:var(--surface);font-size:11px}
+.ovkl{font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:var(--text-3);font-weight:600}
+.ovks{font-size:9px;color:var(--text-3)}
+.ovtgt{width:96px;text-align:right;border:1px solid var(--border);border-radius:6px;padding:2px 6px;background:var(--surface);font-size:12px}
+.ovtgt::placeholder{color:var(--text-3);font-style:italic}
+</style>
+<script>
+function overview(){
+  function path(vals, W, H, pad){ if(!vals||vals.length<2) return {line:'',fill:''};
+    const mn=Math.min(...vals), mx=Math.max(...vals), rng=(mx-mn)||1;
+    const xo=i=>i/(vals.length-1)*W, yo=v=>pad+(mx-v)/rng*(H-2*pad);
+    const pts=vals.map((v,i)=>xo(i).toFixed(1)+','+yo(v).toFixed(1));
+    return {line:'M'+pts.join(' L'), fill:'M0,'+H+' L'+pts.join(' L')+' L'+W+','+H+' Z'}; }
+  return {
+    d:{}, range:{}, hb:{rows:[],totals:{}}, hf:{strat:'',type:'',purpose:''},
+    period: (localStorage.getItem('tg_ov_period')||'month'), pfrom:'', pto:'',
+    expMonth: new Date().toISOString().slice(0,7),   // dashboard = current month's expiry by default
+    marginSource: (localStorage.getItem('tg_margin_src')||'live'),  // entry · manual · live(Kite)
+    setMarginSrc(v){ this.marginSource=v; try{localStorage.setItem('tg_margin_src',v);}catch(e){} },
+    targets:{}, groups:{}, hgroup:'',
+    _bounds(p){
+      const t=new Date(); const iso=d=>d.toISOString().slice(0,10);
+      let fy=this._fyBounds();
+      if(p==='custom') return [this.pfrom||fy[0], this.pto||fy[1]];
+      if(p==='all') return ['2024-04-01', iso(t)];
+      if(p==='fy') return fy;
+      if(p==='today') return [iso(t), iso(t)];
+      if(p==='week'){ const s=new Date(t); s.setDate(t.getDate()-t.getDay()); return [iso(s), iso(t)]; }
+      if(p==='month') return [iso(new Date(t.getFullYear(),t.getMonth(),1)), iso(t)];
+      if(p==='lastmonth'){ const s=new Date(t.getFullYear(),t.getMonth()-1,1); const e=new Date(t.getFullYear(),t.getMonth(),0); return [iso(s), iso(e)]; }
+      if(p==='quarter'){ const q=Math.floor(t.getMonth()/3); return [iso(new Date(t.getFullYear(),q*3,1)), iso(t)]; }
+      return fy;
+    },
+    async setPeriod(p){ this.period=p; localStorage.setItem('tg_ov_period',p); if(p!=='custom') await this.loadRange(); },
+    async applyCustom(){ if(this.pfrom&&this.pto) await this.loadRange(); },
+    async loadRange(){ const b=this._bounds(this.period); try{ this.range=await fetch('/api/reporting/range?start='+b[0]+'&end='+b[1]).then(r=>r.json()); }catch(e){} },
+    periodLabel(){ return ({all:'all-time',fy:'FY',quarter:'quarter',month:'this month',lastmonth:'last month',week:'this week',today:'today',custom:'range'})[this.period]||this.period; },
+    periodPnl(){ const ds=this._days(); if(!ds.length) return null; return ds.reduce((a,x)=>a+(x.net!=null?x.net:(x.booked||0)),0); },
+    async load(){
+      try{ this.d=await fetch('/api/report-full').then(r=>r.json()); }catch(e){}
+      await this.loadRange();
+      try{ const c=window.tgClient?window.tgClient():'All'; this.hb=await fetch('/api/holdings/book?client='+encodeURIComponent(c)).then(r=>r.json()); }catch(e){}
+      try{ this.targets=(await fetch('/api/strategy-targets').then(r=>r.json())).targets||{}; }catch(e){}
+      try{ this.groups=(await fetch('/api/stock-groups').then(r=>r.json())).groups||{}; }catch(e){}
+    },
+    // ── Strategy-wise summary (options, scoped to the selected expiry month) ──
+    _expOf(s){ return (s.expiry_month || (s.trade_date||'').slice(0,7) || ''); },
+    expiryOpts(){
+      const set={}; (this.d.strategies||[]).forEach(s=>{ const m=this._expOf(s); if(/^\d{4}-\d{2}$/.test(m)) set[m]=1; });
+      const now=new Date().toISOString().slice(0,7); set[now]=1;   // always offer the current month
+      const A=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+      return Object.keys(set).sort().reverse().map(k=>({key:k, label:A[+k.slice(5)-1]+' '+k.slice(0,4)}));
+    },
+    expLabel(){ const o=this.expiryOpts().find(m=>m.key===this.expMonth); return o?o.label:this.expMonth; },
+    _stratScoped(){ return (this.d.strategies||[]).filter(s=>this._expOf(s)===this.expMonth); },
+    stratRows(){
+      const by={};
+      for(const s of this._stratScoped()){
+        const c=window.tgCanon(s);
+        const g=by[c]=by[c]||{code:c,label:(window.TG_STRAT_LABEL[c]||'').replace(/^S\d[AB]? · /,''),premium:0,max_profit:0,margin:0,m_entry:0,m_manual:0,m_live:0,pnl:0,n:0,n_open:0};
+        g.premium+=Number(s.premium)||0; g.max_profit+=Number(s.max_profit)||0;
+        // three margin bases (fallback chain so nothing blanks): entry(locked) · manual(M-sheet ledger) · live(Kite)
+        g.m_entry  += Number(s.margin_entry ?? s.margin_real ?? s.margin_live)||0;
+        g.m_manual += Number(s.margin_real  ?? s.margin_live)||0;
+        g.m_live   += Number(s.margin_kite  ?? s.margin_real ?? s.margin_live)||0;
+        g.pnl+=Number(s.pnl)||0;
+        g.n++; if((s.status||'').toLowerCase().startsWith('open')) g.n_open++;
+      }
+      const order={S1:1,S2A:2,S2B:3,S3:4,S5:5,S6:6,S7:7,S8:8,S4:9,FUT:10,OTHER:11};
+      const src=this.marginSource;
+      return Object.values(by).map(g=>{
+        g.margin = src==='entry'? g.m_entry : src==='live'? g.m_live : g.m_manual;
+        // Yield % = max profit (≈ premium collected) as a return on the selected margin basis.
+        g.yield_pct = g.margin? Math.round(g.max_profit/g.margin*10000)/100 : null;
+        const t=Number(this.targets[g.code])||0; g.used_pct = t? Math.round(g.margin/t*100) : null;
+        return g;
+      }).sort((a,b)=>(order[a.code]||99)-(order[b.code]||99));
+    },
+    // whole-book margin on the selected source (default Live) — keeps KPI cards consistent with the table
+    bookMargin(){
+      const src=this.marginSource, k=this.k();
+      if(src==='manual') return (k.margin_real ?? k.margin_live) || 0;   // trusted netted ledger total
+      let tot=0;
+      (this.d.strategies||[]).forEach(s=>{
+        if(!(s.status||'').toLowerCase().startsWith('open')) return;
+        tot += Number(src==='entry' ? (s.margin_entry ?? s.margin_real ?? s.margin_live)
+                                    : (s.margin_kite  ?? s.margin_real ?? s.margin_live))||0;
+      });
+      return tot || ((k.margin_real ?? k.margin_live)||0);
+    },
+    bookMarginSub(){ return this.marginSource==='live'?'live · Kite':this.marginSource==='entry'?'entry · locked':(this.k().margin_real_is_ledger?'real · ledger':'estimate'); },
+    stratTotals(){
+      const rows=this.stratRows(); const t={premium:0,max_profit:0,margin:0,pnl:0,target:0,n_open:0};
+      rows.forEach(r=>{ t.premium+=r.premium; if(r.n_open>0) t.max_profit+=r.max_profit; t.margin+=r.margin; t.pnl+=r.pnl; t.target+=Number(this.targets[r.code])||0; t.n_open+=r.n_open; });
+      t.yield_pct = t.margin? Math.round(t.max_profit/t.margin*10000)/100 : null;
+      return t;
+    },
+    async saveTarget(code,val){
+      const v=val===''?null:Number(val); this.targets[code]=v;
+      try{ await fetch('/api/strategy-targets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targets:{[code]:v}})}); }catch(e){}
+    },
+    qty(v){ return v?Math.round(v).toLocaleString('en-IN'):'—'; },
+    _hpass(b){ return (!this.hf.strat||b.strategy===this.hf.strat) && (!this.hf.type||b.type===this.hf.type) && (!this.hf.purpose||b.purpose===this.hf.purpose); },
+    _inGroup(sym){ return !this.hgroup || (this.groups[this.hgroup]||[]).includes((sym||'').toUpperCase()); },
+    get hsum(){
+      const s={n:0,value:0,equity_value:0,futures_value:0,equity_qty:0,futures_qty:0,total_qty:0,covered_qty:0,uncovered_qty:0,invested:0,unrealised:0};
+      for(const r of (this.hb.rows||[])){
+        if(!this._inGroup(r.symbol)) continue;          // stock-group filter (Adani etc.)
+        const bk=(r.buckets||[]).filter(b=>this._hpass(b));
+        if(!bk.length) continue;
+        const dq=bk.reduce((a,b)=>a+(b.qty||0),0); if(!dq) continue;
+        const eq=bk.filter(b=>b.type==='equity').reduce((a,b)=>a+(b.qty||0),0);
+        const fu=bk.filter(b=>b.type==='futures').reduce((a,b)=>a+(b.qty||0),0);
+        s.n++; s.total_qty+=dq; s.equity_qty+=eq; s.futures_qty+=fu;
+        s.covered_qty+=r.covered_qty||0; s.uncovered_qty+=r.uncovered_qty||0;
+        s.invested+=r.invested||0; s.unrealised+=r.unrealised||0;
+        if(r.current){ s.value+=dq*r.current; s.equity_value+=eq*r.current; s.futures_value+=fu*r.current; }
+      }
+      s.covered_pct=s.total_qty?Math.round(s.covered_qty/s.total_qty*100):0;
+      return s;
+    },
+    // per-stock rows for the selected group (drill-down)
+    groupRows(){
+      if(!this.hgroup) return [];
+      return (this.hb.rows||[]).filter(r=>this._inGroup(r.symbol)&&this._hpass2(r))
+        .map(r=>({symbol:r.symbol,value:r.value,invested:r.invested,unrealised:r.unrealised,
+          unrealised_pct:r.unrealised_pct,covered_pct:r.covered_pct,uncovered_qty:r.uncovered_qty}))
+        .sort((a,b)=>Math.abs(b.value||0)-Math.abs(a.value||0));
+    },
+    _hpass2(r){ return (r.buckets||[]).some(b=>this._hpass(b)); },
+    _fyBounds(){ const now=new Date(2026,5,22); let y=now.getFullYear(); if(now.getMonth()<3) y--; return [y+'-04-01',(y+1)+'-03-31']; },
+    money(v){ if(v==null) return '—'; const s=v<0?'−':'+'; const a=Math.abs(v); if(a>=1e7) return s+'₹'+(a/1e7).toFixed(2)+'Cr'; if(a>=1e5) return s+'₹'+(a/1e5).toFixed(2)+'L'; return s+'₹'+Math.round(a).toLocaleString('en-IN'); },
+    cr(v){ return v? '₹'+(v/1e7).toFixed(2)+'Cr' : '—'; },
+    k(){ return this.d.kpis||{}; },
+    _days(){ return Object.values((this.range&&this.range.days)||{}).filter(x=>x.date).sort((a,b)=>a.date<b.date?-1:1); },
+    get curve(){ const ds=this._days(); if(!ds.length) return {line:'',fill:'',from:'',to:'',last:null};
+      let c=0; const vals=ds.map(x=>{c+=(x.net!=null?x.net:(x.booked||0)); return c;});
+      const p=path(vals,560,150,12); return {...p, from:ds[0].date, to:ds[ds.length-1].date, last:c}; },
+    get bars(){ const ds=this._days(); const byM={};
+      ds.forEach(x=>{ const m=x.date.slice(0,7); byM[m]=(byM[m]||0)+(x.net!=null?x.net:(x.booked||0)); });
+      const ms=Object.keys(byM).sort(); const vals=ms.map(m=>byM[m]); if(!vals.length) return {rects:[],zero:75,first:'',lastM:''};
+      const mx=Math.max(1,...vals.map(Math.abs)); const W=560,H=150,zero=H/2, n=vals.length, bw=Math.min(42,(W/n)*0.6);
+      const rects=vals.map((v,i)=>{ const x=(i+0.5)*(W/n)-bw/2; const h=Math.abs(v)/mx*(H/2-8); return {x:x.toFixed(1),w:bw.toFixed(1),h:h.toFixed(1),y:(v>=0?zero-h:zero).toFixed(1),pos:v>=0}; });
+      return {rects,zero,first:ms[0],lastM:ms[ms.length-1]}; },
+    kpiCards(){
+      const k=this.k(); const ds=this._days();
+      const mtd=ds.filter(x=>x.date.slice(0,7)===(this.range.end||'').slice(0,7)).reduce((a,x)=>a+(x.net!=null?x.net:(x.booked||0)),0);
+      const curveVals=(()=>{let c=0;return ds.map(x=>{c+=(x.net!=null?x.net:x.booked||0);return c;});})();
+      const sp=(vals,W=90,H=34)=>path(vals,W,H,4);
+      const cards=[
+        {id:0,label:'Realized FY',glyph:'₹',value:this.money(this.curve.last),tone:(this.curve.last??0)>=0?'text-gain-600':'text-loss-600',sub:'cumulative booked',
+         ...(()=>{const p=sp(curveVals);return {spark:p.line,sparkFill:p.fill,stroke:(this.curve.last??0)>=0?'#2f64d4':'#d2463c'};})()},
+        {id:1,label:'Realized MTD',glyph:'M',value:this.money(mtd),tone:mtd>=0?'text-gain-600':'text-loss-600',sub:'this month',
+         ...(()=>{const v=ds.slice(-12).map(x=>x.net!=null?x.net:x.booked||0);const p=sp(v);return {spark:p.line,sparkFill:p.fill,stroke:mtd>=0?'#15966a':'#d2463c'};})()},
+        {id:2,label:'Margin deployed',glyph:'%',value:this.cr(this.bookMargin()),tone:'',sub:this.bookMarginSub()+(k.margin_ledger_fut?(' · fut '+this.cr(k.margin_ledger_fut)):''),spark:''},
+        {id:3,label:'Premium',glyph:'P',value:this.money(k.premium),tone:'text-gain-600',sub:'max '+this.money(k.max_profit),spark:''},
+      ];
+      return cards;
+    },
+  };
+}
+</script>
+{% endblock %}

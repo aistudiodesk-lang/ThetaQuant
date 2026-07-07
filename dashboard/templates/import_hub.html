@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Import · Theta Quant{% endblock %}
+{% block content %}
+<div class="space-y-4" x-data="importHub()" x-init="load()">
+
+  <div class="flex items-end justify-between gap-3 flex-wrap">
+    <div>
+      <h1 class="text-[21px] font-bold tracking-tight">Import data</h1>
+      <div class="text-[12px] text-[var(--text-3)]">Download a template, fill it in (or use your Excel sheet — same columns), and upload. Headers match your reporting workbook.</div>
+    </div>
+    <button @click="load()" class="text-[11px] px-2 py-1.5 rounded-md border border-[var(--border)]">↻</button>
+  </div>
+
+  <div class="card p-3 text-[11px] text-[var(--text-3)] leading-snug">
+    <b class="text-[var(--text-1)]">How it works:</b> 1 · Download the CSV template for what you're importing — it opens in Excel/Sheets with example rows. 2 · Paste or fill your data (delete the example + the <code>#</code> notes row). 3 · Upload the filled CSV or your <code>.xlsx</code>. Imports <b>upsert</b> (re-uploading updates, never duplicates). Live trade data stays on this machine.
+  </div>
+
+  <!-- full master reporting workbook (the format that fills the WHOLE tool) -->
+  <div class="card p-4 border-l-4" style="border-left-color:var(--blue)">
+    <div class="flex items-center justify-between gap-3 flex-wrap">
+      <div>
+        <div class="text-[13px] font-bold">Full reporting workbook — format reference</div>
+        <div class="text-[11px] text-[var(--text-3)] leading-snug mt-0.5">The master multi-sheet workbook (Selling Plan, S1–S7, M-margin sheets…) that fills <b>everything</b> — Overview, Full Reporting, all strategy desks, margin. Column names are matched <b>fuzzily</b>, so MIS need not rename anything; extra columns are ignored. The <b>Info</b> sheet (Kite keys) is stripped from this download.</div>
+      </div>
+      <a href="/api/import/reporting-template" class="shrink-0 text-[12px] font-semibold rounded-md px-3 py-2 text-white" style="background:var(--blue)">Download reference ↓</a>
+    </div>
+    <!-- one-click ingest of the monthly master workbook (S-strategy sheets → journal) -->
+    <div class="mt-3 pt-3 border-t border-[var(--border)] flex items-center gap-2 flex-wrap text-[11px]">
+      <span class="font-semibold text-[var(--text-1)]">Upload monthly workbook:</span>
+      <input type="file" id="mw_file" accept=".xlsx,.xls" class="text-[11px] flex-1 min-w-0" @change="mwFile=$event.target.files[0]">
+      <label class="flex items-center gap-1"><input type="checkbox" x-model="mwExclExpiry"> exclude expiry (S4)</label>
+      <button @click="uploadMaster()" :disabled="mwBusy || !mwFile" class="text-[11px] font-semibold rounded-md px-3 py-1.5 text-white disabled:opacity-40" style="background:var(--blue)" x-text="mwBusy?'Importing…':'Import ↑'"></button>
+      <span class="text-[11px]" :class="(mwMsg||'').startsWith('✓')?'text-gain-600':'text-loss-600'" x-text="mwMsg"></span>
+    </div>
+    <div class="text-[10px] text-[var(--text-3)] mt-1.5">Ingests the S-strategy sheets into the journal (idempotent — re-upload updates, never doubles). Expiry (S4) is skipped by default. M-margin / Selling-Plan sheets: drop the workbook into <code>Google sheet excel reporting/</code> for the ledger/holdings.</div>
+  </div>
+
+  <!-- groups of import cards -->
+  <template x-for="grp in groups" :key="grp">
+    <div class="space-y-2">
+      <div class="text-[11px] uppercase tracking-wider text-[var(--text-3)] font-semibold mt-2" x-text="grp"></div>
+      <div class="grid md:grid-cols-2 gap-3">
+        <template x-for="t in byGroup(grp)" :key="t.key">
+          <div class="card p-4">
+            <div class="flex items-start justify-between gap-2">
+              <div>
+                <div class="font-semibold text-[14px]" x-text="t.title"></div>
+                <div class="text-[11px] text-[var(--text-3)] mt-0.5" x-text="t.target"></div>
+              </div>
+              <a :href="'/api/import/template/'+t.key" class="shrink-0 text-[11px] font-semibold rounded-md px-2.5 py-1.5 border border-[var(--blue)] text-[var(--blue)]">Template ↓</a>
+            </div>
+            <div class="text-[11px] text-[var(--text-3)] mt-2 leading-snug" x-text="t.desc"></div>
+            <div class="text-[10px] text-[var(--text-3)] mt-2 num">
+              <span class="opacity-70">Columns:</span> <span x-text="t.columns.join(' · ')"></span>
+            </div>
+            <div class="mt-3 flex items-center gap-2">
+              <input type="file" :id="'f_'+t.key" accept=".csv,.xlsx,.xls" class="text-[11px] flex-1 min-w-0"
+                     @change="pick(t.key,$event)">
+              <button @click="upload(t.key)" :disabled="busy===t.key || !files[t.key]"
+                class="text-[11px] font-semibold text-white rounded-md px-3 py-1.5 disabled:opacity-40" style="background:var(--blue)"
+                x-text="busy===t.key?'Importing…':'Upload'"></button>
+            </div>
+            <div class="text-[11px] mt-2 leading-snug" :class="(res[t.key]&&res[t.key].ok)?'text-gain-600':'text-loss-600'" x-text="msg[t.key]||''"></div>
+            <template x-if="res[t.key] && (res[t.key].errors||[]).length">
+              <div class="text-[10px] text-loss-600 mt-1 num">
+                <template x-for="(e,ei) in res[t.key].errors.slice(0,5)" :key="ei"><div x-text="'• '+e"></div></template>
+              </div>
+            </template>
+          </div>
+        </template>
+      </div>
+    </div>
+  </template>
+
+  <div class="text-[10px] text-[var(--text-3)] mt-2">Tip: your existing workbook sheets (Master Entry, S1 Options CC Inv, Futures Holding…) already match these headers — export a sheet to CSV and upload it here.</div>
+</div>
+
+<script>
+function importHub(){
+  return {
+    types:[], files:{}, busy:'', res:{}, msg:{},
+    mwFile:null, mwExclExpiry:true, mwBusy:false, mwMsg:'',
+    async load(){ try{ this.types=(await fetch('/api/import/types').then(r=>r.json())).types||[]; }catch(e){} },
+    async uploadMaster(){
+      if(!this.mwFile) return;
+      this.mwBusy=true; this.mwMsg='';
+      const fd=new FormData(); fd.append('file',this.mwFile);
+      fd.append('exclude_expiry', this.mwExclExpiry?'1':'0');
+      try{
+        const j=await fetch('/api/import/master-workbook',{method:'POST',body:fd}).then(r=>r.json());
+        if(j.ok){
+          const ps=j.per_sheet||{}; const tot=Object.values(ps).reduce((a,v)=>a+(v.realized||0),0);
+          const added=Object.values(ps).reduce((a,v)=>a+(v.added||0),0);
+          this.mwMsg='✓ '+(j.sheets||[]).length+' sheets · '+added+' new · ₹'+Math.round(tot/1e5)+'L realised'+(j.purged_live?(' · replaced '+j.purged_live+' live'):'');
+        } else { this.mwMsg='✗ '+(j.error||'failed'); }
+      }catch(e){ this.mwMsg='✗ '+e; }
+      this.mwBusy=false;
+    },
+    get groups(){ return [...new Set(this.types.map(t=>t.group))]; },
+    byGroup(g){ return this.types.filter(t=>t.group===g); },
+    pick(key,ev){ this.files[key]=ev.target.files[0]||null; this.msg[key]=''; },
+    async upload(key){
+      const f=this.files[key]; if(!f) return;
+      this.busy=key; this.msg[key]='';
+      const fd=new FormData(); fd.append('file',f);
+      try{
+        const j=await fetch('/api/import/'+key,{method:'POST',body:fd}).then(r=>r.json());
+        this.res[key]=j;
+        if(j.ok){ this.msg[key]='✓ Imported '+j.imported+(j.skipped?(' · '+j.skipped+' skipped'):'')+(j.note?(' · '+j.note):''); }
+        else { this.msg[key]='✗ '+(j.error||'failed'); }
+      }catch(e){ this.msg[key]='✗ '+e; }
+      this.busy='';
+    },
+  };
+}
+</script>
+{% endblock %}

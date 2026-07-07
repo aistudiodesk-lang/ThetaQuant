@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  com.rohanshah.kite-session-sync.plist
+
+  Fires post_login_sync.sh AUTOMATICALLY whenever ~/.config/kite_session.json
+  is modified (i.e., every successful Kite Connect login).
+
+  Defense-in-depth: even if kite_login.py is bypassed (e.g. dashboard web flow,
+  or some future API tool), this catches the session-file change and runs the
+  backfill + snapshot save.
+
+  To install:
+    cp scripts/com.rohanshah.kite-session-sync.plist ~/Library/LaunchAgents/
+    launchctl unload ~/Library/LaunchAgents/com.rohanshah.kite-session-sync.plist 2>/dev/null
+    launchctl load ~/Library/LaunchAgents/com.rohanshah.kite-session-sync.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.rohanshah.kite-session-sync</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/env</string>
+        <string>python3</string>
+        <string>/Users/rohanshah/Desktop/AI Instructions/Trading Developments/05 - Backtest Engine (separate)/scripts/post_login_sync.py</string>
+    </array>
+
+    <!-- Trigger: any time ~/.config/kite_session.json is modified -->
+    <key>WatchPaths</key>
+    <array>
+        <string>/Users/rohanshah/.config/kite_session.json</string>
+    </array>
+
+    <!-- Don't restart on its own; only re-fire on file change. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/rohanshah/Desktop/AI Instructions/Trading Developments/05 - Backtest Engine (separate)/results/kite_session_sync.stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/Users/rohanshah/Desktop/AI Instructions/Trading Developments/05 - Backtest Engine (separate)/results/kite_session_sync.stderr.log</string>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/rohanshah/Desktop/AI Instructions/Trading Developments/05 - Backtest Engine (separate)</string>
+</dict>
+</plist>

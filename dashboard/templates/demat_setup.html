@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block title %}Demat Accounts · Theta Quant{% endblock %}
+{% block content %}
+<div class="space-y-4 max-w-[760px]" x-data="dematSetup()" x-init="load()">
+
+  <div>
+    <h1 class="text-xl font-bold tracking-tight">Demat accounts &amp; contract-note passwords</h1>
+    <div class="text-[12px] text-[var(--text-3)]">Set up each demat <b>once</b>. The reconciliation engine then ingests its contract notes automatically — you never type a password per upload.</div>
+  </div>
+
+  <div class="card p-3 text-[11px] text-[var(--text-3)] border-l-4" style="border-left-color:var(--gain-600,#15966a)">
+    🔒 Passwords are stored <b>locally on this host</b> (<span class="num">~/.config/thetadesk_demat_creds.json</span>, owner-only 0600) — <b>never</b> in GitHub, training data, or memory. They're never sent back to the browser (shown masked). Same model as your Kite login.
+  </div>
+
+  <!-- add / edit -->
+  <div class="card p-4">
+    <div class="text-[12px] font-semibold mb-3" x-text="form.demat && editing ? ('Edit '+form.demat) : 'Add a demat'"></div>
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-3 text-[12px]">
+      <label class="flex flex-col gap-0.5"><span class="text-[var(--text-3)]">Demat / UCC code</span>
+        <input x-model="form.demat" :disabled="editing" placeholder="e.g. S3858" class="num uppercase border border-[var(--border)] rounded-lg px-2 py-1.5 font-semibold disabled:opacity-60"></label>
+      <label class="flex flex-col gap-0.5"><span class="text-[var(--text-3)]">Broker</span>
+        <input x-model="form.broker" placeholder="Monarch / Axis…" class="border border-[var(--border)] rounded-lg px-2 py-1.5"></label>
+      <label class="flex flex-col gap-0.5"><span class="text-[var(--text-3)]">Client / entity</span>
+        <input x-model="form.client" placeholder="entity name" class="border border-[var(--border)] rounded-lg px-2 py-1.5"></label>
+      <label class="flex flex-col gap-0.5"><span class="text-[var(--text-3)]">Contract-note password</span>
+        <input x-model="form.password" type="password" :placeholder="editing && hasPw ? '•••••• (set — leave blank to keep)' : 'PDF password'" class="num border border-[var(--border)] rounded-lg px-2 py-1.5"></label>
+    </div>
+    <div class="flex items-center gap-2 mt-3">
+      <button @click="save()" class="text-[12px] font-semibold text-white px-4 py-1.5 rounded-md" style="background:var(--blue)" x-text="editing?'Save changes':'Add demat'"></button>
+      <button x-show="editing" @click="reset()" class="text-[12px] px-3 py-1.5 rounded-md border border-[var(--border)]">Cancel</button>
+      <span class="text-[11px]" :class="msg.includes('✓')?'text-gain-600':'text-loss-600'" x-text="msg"></span>
+    </div>
+  </div>
+
+  <!-- list -->
+  <div class="card p-0 overflow-hidden">
+    <table class="data-table">
+      <thead><tr><th>Demat / UCC</th><th>Broker</th><th>Client</th><th>Password</th><th></th></tr></thead>
+      <tbody>
+        <template x-for="d in demats" :key="d.demat">
+          <tr>
+            <td class="font-semibold num" x-text="d.demat"></td>
+            <td x-text="d.broker||'—'"></td>
+            <td x-text="d.client||'—'"></td>
+            <td><span class="pill text-[9px]" :class="d.has_password?'bg-gain-100 text-gain-700':'bg-warn-100 text-warn-700'" x-text="d.has_password?'✓ set':'not set'"></span></td>
+            <td class="text-right whitespace-nowrap"><button @click="edit(d)" class="text-[11px] text-[var(--blue)] font-semibold">edit</button> <button @click="del(d)" class="text-[11px] text-loss-600 ml-2">remove</button></td>
+          </tr>
+        </template>
+      </tbody>
+    </table>
+    <div x-show="!demats.length" class="p-8 text-center text-[var(--text-3)] text-[12px]">No demats set up yet. Add one above.</div>
+  </div>
+
+  <div class="text-[10px] text-[var(--text-3)]">Tip: mProfit can auto-forward all brokers' contract notes from email — once that's wired, even these passwords become unnecessary for the auto path.</div>
+</div>
+
+<script>
+function dematSetup(){
+  return {
+    demats:[], form:{demat:'',broker:'',client:'',password:''}, editing:false, hasPw:false, msg:'',
+    async load(){ try{ const j=await fetch('/api/demat-creds').then(r=>r.json()); this.demats=j.demats||[]; }catch(e){} },
+    reset(){ this.form={demat:'',broker:'',client:'',password:''}; this.editing=false; this.hasPw=false; this.msg=''; },
+    edit(d){ this.form={demat:d.demat,broker:d.broker||'',client:d.client||'',password:''}; this.editing=true; this.hasPw=d.has_password; this.msg=''; },
+    async save(){ if(!(this.form.demat||'').trim()){ this.msg='✗ demat code required'; return; }
+      try{ const j=await fetch('/api/demat-creds',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(this.form)}).then(r=>r.json());
+        if(j.saved){ this.msg='✓ saved'; await this.load(); this.reset(); } else this.msg='✗ '+(j.error||'failed'); }catch(e){ this.msg='✗ '+e; } },
+    async del(d){ if(!confirm('Remove '+d.demat+'?'))return; await fetch('/api/demat-creds/'+encodeURIComponent(d.demat),{method:'DELETE'}); await this.load(); },
+  };
+}
+</script>
+{% endblock %}

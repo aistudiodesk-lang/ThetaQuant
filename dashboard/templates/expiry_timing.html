@@ -1,0 +1,117 @@
+{% extends "base.html" %}
+{% block title %}Expiry Timing · Theta Quant{% endblock %}
+{% block content %}
+<div class="space-y-4 max-w-[760px]" x-data="expiryTiming()" x-init="load(); setInterval(()=>load(),30000)">
+
+  <div class="flex items-end justify-between gap-3 flex-wrap">
+    <div>
+      <h1 class="text-[21px] font-bold tracking-tight">Expiry Timing</h1>
+      <div class="text-[12px] text-[var(--text-3)]">When to sell so you stop leaving 30–40% premium on the table. Locked rule, analyses 027/028/009.</div>
+    </div>
+    <div class="inline-flex rounded-lg border border-[var(--border)] overflow-hidden text-[12px] font-semibold">
+      <template x-for="i in ['SENSEX','NIFTY']" :key="i">
+        <button @click="inst=i; load()" class="px-3 py-1.5" :class="inst===i?'bg-[var(--text-1)] text-[var(--surface)]':'text-[var(--text-3)]'" x-text="i"></button>
+      </template>
+    </div>
+  </div>
+
+  <!-- not an expiry day -->
+  <div x-show="d.is_expiry===false" class="card p-5 text-center">
+    <div class="text-[13px] font-semibold">Not an expiry day for <span x-text="d.instrument"></span></div>
+    <div class="text-[12px] text-[var(--text-3)] mt-1">This panel goes live on E-0. The rule still applies whenever you sell Tier-1 deep-OTM: core in the window, 1.3× limits for the rest, market-fill by 11:30.</div>
+  </div>
+
+  <!-- THE headline: what to do this minute -->
+  <div class="card p-5" :class="d.tone==='go'?'ring-2 ring-gain-400':d.tone==='act'?'ring-2 ring-loss-400':''">
+    <div class="flex items-center justify-between">
+      <div class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">Now <span class="num" x-text="d.now"></span> · <span x-text="d.instrument"></span> · regime <b x-text="d.regime"></b></div>
+      <div class="text-[11px] num text-[var(--text-3)]">window <b x-text="d.window"></b></div>
+    </div>
+    <div class="text-[20px] font-bold mt-1.5 leading-tight"
+         :class="d.tone==='go'?'text-gain-600':d.tone==='act'?'text-loss-600':d.tone==='hold'?'text-warn-600':''"
+         x-text="d.headline"></div>
+    <div x-show="d.phase==='limits_working'||d.phase==='window'" class="text-[12px] num text-[var(--text-3)] mt-1">
+      Reserve market-fill at <b x-text="d.reserve_deadline"></b> · <span x-text="d.mins_to_deadline"></span> min left
+    </div>
+  </div>
+
+  <!-- SIGNALS to read at 09:15–09:20 -->
+  <div class="card p-4">
+    <div class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mb-2">Signals to read · 09:15–09:20</div>
+    <table class="data-table">
+      <thead><tr><th>Signal</th><th>Calm</th><th>Normal</th><th>Rich / risk</th></tr></thead>
+      <tbody>
+        <tr><td>Gap %</td><td>≤0.3</td><td>0.3–0.7</td><td class="font-semibold">&gt;0.7</td></tr>
+        <tr><td>First-15m range (the gate)</td><td>≤0.5</td><td>0.5–1.0</td><td class="font-semibold">&gt;1.0</td></tr>
+        <tr><td>India VIX</td><td>≤13</td><td>13–18</td><td class="font-semibold">&gt;18</td></tr>
+        <tr><td>2.25% prem (₹/Cr model)</td><td>5,805</td><td>7,256</td><td>9,030–12,739</td></tr>
+      </tbody>
+    </table>
+    <div class="text-[11px] text-[var(--text-3)] mt-2">Range gates: <b>≤0.4%</b> opens Tier-3 · <b>≤0.7%</b> opens Tier-2. Wider → deep-OTM only (it's premium-rich anyway).</div>
+  </div>
+
+  <!-- WHICH SCENARIO → when to pull (live regime highlights the active row) -->
+  <div class="card p-4">
+    <div class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mb-2">Scenario → when to pull · target ₹6,000/Cr</div>
+    <div class="space-y-1.5">
+      <div class="p-2 rounded-lg border" :class="scenarioOf()==='rich'?'border-gain-400 bg-gain-50':'border-[var(--border)]'">
+        <b>A · Rich open</b> — deep-OTM ₹9–12K, clears alone. <b>Enter 09:17–09:22</b>, 65% + 1.3× limits. Skip T2/T3 (gates shut).</div>
+      <div class="p-2 rounded-lg border" :class="scenarioOf()==='quiet'?'border-warn-400 bg-warn-50':'border-[var(--border)]'">
+        <b>B · Quiet (calm_green)</b> — deep-OTM thin ₹5,805. <b>Wait to 10:00</b> for the core; tight range opens T2/T3 → layer ~6 Cr (1.5% @11:00 / 0.7% @10:30) to carry yield.</div>
+      <div class="p-2 rounded-lg border" :class="scenarioOf()==='tweener'?'border-[var(--blue)] bg-[var(--blue-tint)]':'border-[var(--border)]'">
+        <b>C · Tweener (normal)</b> — ₹7,256, clears <i>only if the 1.3× spike fills</i>. <b>Enter the window</b>, lean on the spike reserve. No spike by 11:30 → accept ₹5.5–6K, don't cut distance.</div>
+    </div>
+  </div>
+
+  <!-- the 3-step tranche -->
+  <div class="card p-4">
+    <div class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mb-2">The tranche</div>
+    <template x-for="s in d.steps||[]" :key="s.n">
+      <div class="flex items-start gap-2.5 py-1.5 border-b border-[var(--border)] last:border-0">
+        <span class="shrink-0 w-5 h-5 rounded-full flex items-center justify-center text-[11px] font-bold mt-0.5"
+              :class="s.done?'bg-gain-100 text-gain-700':'bg-[var(--bg)] text-[var(--text-3)]'" x-text="s.done?'✓':s.n"></span>
+        <span class="text-[13px]" :class="s.done?'text-[var(--text-3)] line-through':''" x-text="s.do"></span>
+      </div>
+    </template>
+  </div>
+
+  <!-- spike check: did the 1.3× limit fill? -->
+  <div class="card p-4">
+    <div class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mb-2">Spike check — would your 1.3× limit fill?</div>
+    <div class="flex flex-wrap items-end gap-3 text-[12px]">
+      <label class="flex flex-col gap-0.5"><span class="text-[var(--text-3)]">Your fill (₹)</span>
+        <input x-model.number="fill" type="number" step="0.05" @input="load()" class="num w-24 border border-[var(--border)] rounded-lg px-2 py-1.5"></label>
+      <span class="text-[var(--text-3)] pb-2">→ limit at</span>
+      <div class="pb-1.5"><span class="num text-[18px] font-bold text-[var(--blue)]" x-text="d.spike_target?('₹'+d.spike_target):'—'"></span></div>
+      <label class="flex flex-col gap-0.5"><span class="text-[var(--text-3)]">Current prem (₹)</span>
+        <input x-model.number="cur" type="number" step="0.05" @input="load()" class="num w-24 border border-[var(--border)] rounded-lg px-2 py-1.5"></label>
+      <div class="pb-1.5" x-show="d.current_premium">
+        <span class="pill text-[11px] font-bold" :class="d.spike_hit?'bg-gain-100 text-gain-700':'bg-[var(--bg)] text-[var(--text-3)]'"
+              x-text="d.spike_hit?'✓ SPIKE — reserve filling at peak':'below 1.3× — limit resting'"></span>
+      </div>
+    </div>
+    <div class="text-[11px] text-[var(--text-3)] num mt-2"><span x-text="d.instrument"></span> spikes ≥1.3× on ~<b x-text="Math.round((d.spike_base_rate||0)*100)"></b>% of days.</div>
+  </div>
+
+  <!-- why -->
+  <div class="card p-4 bg-[var(--bg)]">
+    <div class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mb-1">Why this works</div>
+    <div class="text-[12px] leading-snug" x-text="d.why"></div>
+  </div>
+</div>
+
+<script>
+function expiryTiming(){
+  return {
+    inst:'NIFTY', fill:null, cur:null, d:{steps:[]},
+    scenarioOf(){ const r=this.d.regime; return r==='calm_green'?'quiet':r==='high_risk'||r==='moderate'?'rich':r==='normal'?'tweener':''; },
+    async load(){
+      const p=new URLSearchParams({instrument:this.inst});
+      if(this.fill) p.set('fill_price', this.fill);
+      if(this.cur) p.set('current_premium', this.cur);
+      try{ this.d=await fetch('/api/expiry/timing?'+p.toString()).then(r=>r.json()); }catch(e){}
+    },
+  };
+}
+</script>
+{% endblock %}

@@ -1,0 +1,290 @@
+{% extends "base.html" %}
+{% block title %}Execution · Theta Quant{% endblock %}
+{% block content %}
+<div class="space-y-5" x-data="execDesk()" x-init="init()">
+
+  <!-- toast stack (auto-start / TP / SL popups) -->
+  <div class="fixed top-16 right-3 z-[90] space-y-2 w-[330px] max-w-[90vw]" x-cloak>
+    <template x-for="t in toasts" :key="t.id">
+      <div class="card p-3 shadow-2xl border-l-4" :class="t.kind==='sl'?'border-loss-500':t.kind==='tp'?'border-gain-500':'border-[var(--blue)]'" x-transition>
+        <div class="flex items-start justify-between gap-2">
+          <div class="text-[12.5px] font-bold" x-text="t.title"></div>
+          <button @click="toasts=toasts.filter(x=>x.id!==t.id)" class="text-[var(--text-3)] text-[14px] leading-none">&times;</button>
+        </div>
+        <div class="text-[11px] text-[var(--text-3)] mt-0.5 num" x-text="t.body"></div>
+      </div>
+    </template>
+  </div>
+
+  <div class="flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-[21px] font-bold tracking-tight">Execution <span class="text-[12px] text-[var(--text-3)] font-normal">(dummy · no live orders)</span></h1>
+      <div class="text-[11px] text-[var(--text-3)]">Take a trade (manual or from a saved preset) → it sits in <b>Trades</b> as running → fills when the entry hits → set TP/SL in its details.</div>
+    </div>
+    <div class="flex items-center gap-2">
+      <span class="pill" :class="mkt.market_open?'bg-gain-100 text-gain-700':'bg-[var(--bg)] text-[var(--text-2)]'" x-text="mkt.label||'—'"></span>
+      <button @click="checkNow()" class="text-[11px] px-3 py-1.5 rounded-md border border-[var(--border)]">↻ Check</button>
+    </div>
+  </div>
+
+  <!-- sub-tabs -->
+  <div class="seg">
+    <button class="seg-btn" :class="tab==='take'&&'on'" @click="tab='take'">Take a trade</button>
+    <button class="seg-btn" :class="tab==='presets'&&'on'" @click="tab='presets'">Saved strategies <span x-text="'('+(presets||[]).length+')'"></span></button>
+    <button class="seg-btn" :class="tab==='trades'&&'on'" @click="tab='trades'">Trades <span x-text="'('+(d.strategies||[]).length+')'"></span></button>
+  </div>
+
+  <!-- pop-up alerts (deduped) -->
+  <template x-for="a in alerts" :key="a.key">
+    <div class="card p-3 border-l-4 flex items-center gap-3" :class="a.fired==='ENTRY'?'border-accent-500':a.fired==='TP'?'border-gain-500':'border-loss-500'">
+      <div class="text-[12px] num flex-1"><b x-text="a.name"></b> — <b x-text="a.fired==='ENTRY'?'ENTRY level hit':a.fired+' hit'"></b> at combined ₹<span x-text="a.premium?.combined"></span>. <span x-text="a.fired==='ENTRY'?'Mark it filled in Trades once you take the real trade.':'Execute the exit now.'"></span></div>
+      <button @click="alerts=alerts.filter(x=>x.key!==a.key)" class="text-[11px] px-2 py-1 rounded border border-[var(--border)]">dismiss</button>
+    </div>
+  </template>
+
+  <!-- ══════════ SAVED STRATEGIES (presets) ══════════ -->
+  <div x-show="tab==='presets'" class="space-y-3">
+    <div class="flex items-center justify-between">
+      <div class="text-[11px] uppercase text-[var(--text-3)] font-semibold">Saved strategies — execute when ready</div>
+      <button @click="tab='take'" class="text-[11px] px-3 py-1.5 rounded-md border border-accent-200 text-accent-700 font-semibold">+ Build new</button>
+    </div>
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+      <template x-for="p in presets" :key="p.id">
+        <div class="card p-4">
+          <div class="flex items-center justify-between"><div class="font-bold text-[13px]" x-text="p.name"></div><button @click="delPreset(p)" class="text-[11px] text-loss-600">✕</button></div>
+          <div class="text-[11px] text-[var(--text-3)] num mt-0.5"><span x-text="p.instrument"></span> · <span x-text="(p.ce_distance_pct??p.distance_pct)+'%CE / '+(p.pe_distance_pct??p.distance_pct)+'%PE'"></span> · <span x-text="p.lots+' lots'"></span></div>
+          <div class="text-[10px] text-[var(--text-3)] num mt-0.5" x-text="p.trigger_mode==='SEPARATE'?('CE≥₹'+(p.ce_threshold??'?')+' PE≥₹'+(p.pe_threshold??'?')):(p.combined_threshold?('combined ≥₹'+p.combined_threshold):(p.yield_per_cr?('≥₹'+p.yield_per_cr.toLocaleString('en-IN')+'/Cr'):'at market'))"></div>
+          <!-- auto-schedule -->
+          <div class="mt-2 pt-2 border-t border-[var(--border)]">
+            <label class="flex items-center justify-between text-[10px] uppercase text-[var(--text-3)] font-semibold mb-1 cursor-pointer">
+              <span>⏰ Auto-schedule</span>
+              <input type="checkbox" :checked="p.sched_enabled" @change="setSched(p,{sched_enabled:$event.target.checked})">
+            </label>
+            <div class="grid grid-cols-2 gap-1.5 text-[11px]" :class="p.sched_enabled?'':'opacity-40'">
+              <label class="space-y-0.5"><span class="text-[9px] text-[var(--text-3)]">Start</span><input type="time" :value="p.sched_start||''" @change="setSched(p,{sched_start:$event.target.value})" class="num w-full border border-[var(--border)] rounded px-1.5 py-1"></label>
+              <label class="space-y-0.5"><span class="text-[9px] text-[var(--text-3)]">Stop</span><input type="time" :value="p.sched_stop||''" @change="setSched(p,{sched_stop:$event.target.value})" class="num w-full border border-[var(--border)] rounded px-1.5 py-1"></label>
+            </div>
+            <div x-show="p.sched_enabled&&p.sched_start" class="text-[10px] text-gain-600 num mt-1">auto-starts <b x-text="p.sched_start"></b><span x-show="p.sched_stop">, stops <b x-text="p.sched_stop"></b></span> · when market open</div>
+          </div>
+          <button @click="armPreset(p)" class="w-full mt-2 text-[12px] px-3 py-1.5 rounded-md bg-accent-600 text-white font-bold">Take trade now</button>
+        </div>
+      </template>
+    </div>
+    <div x-show="!(presets||[]).length" class="card p-10 text-center text-[var(--text-3)] text-[13px]">No saved strategies yet. Build one in <b>Take a trade</b> and click <b>Save as preset</b>.</div>
+  </div>
+
+  <!-- ══════════ TAKE A TRADE ══════════ -->
+  <div x-show="tab==='take'" class="space-y-4">
+    <!-- builder -->
+    <div class="card p-4 space-y-3">
+      <div class="text-[13px] font-bold">Take a trade <span class="font-normal text-[var(--text-3)]">· choose strikes manually, or load a preset above</span></div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-[12px]">
+        <label class="space-y-0.5"><span class="builder-head">Name</span><input x-model="ns.name" placeholder="e.g. NIFTY E-1 wide" class="w-full border border-[var(--border)] rounded px-2 py-1.5"></label>
+        <label class="space-y-0.5"><span class="builder-head">Index</span><select x-model="ns.instrument" @change="preview()" class="w-full border border-[var(--border)] rounded px-2 py-1.5"><option>NIFTY</option><option>SENSEX</option><option>BANKNIFTY</option></select></label>
+        <label class="space-y-0.5"><span class="builder-head">Mode</span><select x-model="ns.mode" @change="preview()" class="w-full border border-[var(--border)] rounded px-2 py-1.5"><option value="strangle">Strangle</option><option value="ce">CE only</option><option value="pe">PE only</option></select></label>
+        <label class="space-y-0.5"><span class="builder-head">Lots</span><input x-model.number="ns.lots" type="number" class="num w-full border border-[var(--border)] rounded px-2 py-1.5"></label>
+      </div>
+      <div class="seg !text-[11px]">
+        <button class="seg-btn" :class="ns.strikeMode==='pct'&&'on'" @click="ns.strikeMode='pct';preview()">% OTM</button>
+        <button class="seg-btn" :class="ns.strikeMode==='pts'&&'on'" @click="ns.strikeMode='pts';preview()">Points away</button>
+      </div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-[12px]">
+        <template x-if="ns.strikeMode==='pct'">
+          <label class="space-y-0.5" x-show="ns.mode!=='pe'"><span class="builder-head">CE % OTM</span><input x-model.number="ns.ce_distance_pct" @input="preview()" type="number" step="0.25" class="num w-full border border-[var(--border)] rounded px-2 py-1.5"></label>
+        </template>
+        <template x-if="ns.strikeMode==='pct'">
+          <label class="space-y-0.5" x-show="ns.mode!=='ce'"><span class="builder-head">PE % OTM</span><input x-model.number="ns.pe_distance_pct" @input="preview()" type="number" step="0.25" class="num w-full border border-[var(--border)] rounded px-2 py-1.5"></label>
+        </template>
+        <template x-if="ns.strikeMode==='pts'">
+          <label class="space-y-0.5" x-show="ns.mode!=='pe'"><span class="builder-head">CE points away</span><input x-model.number="ns.ce_pts" @input="preview()" type="number" step="50" class="num w-full border border-[var(--border)] rounded px-2 py-1.5"></label>
+        </template>
+        <template x-if="ns.strikeMode==='pts'">
+          <label class="space-y-0.5" x-show="ns.mode!=='ce'"><span class="builder-head">PE points away</span><input x-model.number="ns.pe_pts" @input="preview()" type="number" step="50" class="num w-full border border-[var(--border)] rounded px-2 py-1.5"></label>
+        </template>
+      </div>
+
+      <!-- live preview -->
+      <div x-show="pv && !pv.error" class="rounded-md bg-[var(--bg)] p-3 text-[12px] num grid grid-cols-2 md:grid-cols-4 gap-2">
+        <div class="text-[var(--text-3)]">spot <b class="text-[var(--text-1)]" x-text="pv?.spot?.toLocaleString('en-IN')"></b></div>
+        <div x-show="pv?.ce_strike">CE <b x-text="pv?.ce_strike"></b> @₹<b x-text="pv?.ce_premium ?? '—'"></b></div>
+        <div x-show="pv?.pe_strike">PE <b x-text="pv?.pe_strike"></b> @₹<b x-text="pv?.pe_premium ?? '—'"></b></div>
+        <div>combined <b class="text-accent-600" x-text="'₹'+(pv?.combined ?? 0)"></b> · <b x-text="pv?.yield_per_cr?('₹'+pv.yield_per_cr.toLocaleString('en-IN')+'/Cr'):'—'"></b></div>
+      </div>
+      <div x-show="pv?.error" class="text-[11px] text-warn-600" x-text="'Live preview needs Kite + market data: '+(pv?.error||'')"></div>
+
+      <!-- entry trigger -->
+      <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Entry trigger</div>
+      <div class="grid grid-cols-2 md:grid-cols-3 gap-2 text-[12px] items-center">
+        <select x-model="ns.trigger_mode" class="border border-[var(--border)] rounded px-2 py-1.5"><option value="COMBINED">Combined ≥ ₹</option><option value="PER_CR">Yield ≥ ₹/Cr</option><option value="SEPARATE">Per-leg ≥ ₹</option><option value="NONE">Take at market (now)</option></select>
+        <template x-if="ns.trigger_mode==='COMBINED'"><input x-model.number="ns.combined_threshold" type="number" step="0.05" placeholder="combined ≥ ₹" class="num border border-[var(--border)] rounded px-2 py-1.5"></template>
+        <template x-if="ns.trigger_mode==='PER_CR'"><input x-model.number="ns.yield_per_cr" type="number" placeholder="₹/Cr e.g. 5000" class="num border border-[var(--border)] rounded px-2 py-1.5"></template>
+        <template x-if="ns.trigger_mode==='SEPARATE'"><div class="col-span-2 grid grid-cols-2 gap-2"><input x-model.number="ns.ce_threshold" type="number" step="0.05" placeholder="CE ≥ ₹" class="num border border-[var(--border)] rounded px-2 py-1.5"><input x-model.number="ns.pe_threshold" type="number" step="0.05" placeholder="PE ≥ ₹" class="num border border-[var(--border)] rounded px-2 py-1.5"></div></template>
+      </div>
+
+      <!-- TP / SL set up-front (optional; editable later in trade details) -->
+      <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Take profit / Stop loss <span class="normal-case font-normal">(optional now — editable in trade details)</span></div>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-[12px]">
+        <select x-model="ns._tpmode" class="border border-[var(--border)] rounded px-2 py-1.5"><option value="premium">TP: combined ≤ ₹</option><option value="profit">TP: profit ≥ ₹</option></select>
+        <input x-model.number="ns._tpval" type="number" step="0.05" placeholder="TP value" class="num border border-[var(--border)] rounded px-2 py-1.5">
+        <select x-model="ns._slmode" class="border border-[var(--border)] rounded px-2 py-1.5"><option value="premium">SL: combined ≥ ₹</option><option value="loss">SL: loss ≥ ₹</option></select>
+        <input x-model.number="ns._slval" type="number" step="0.05" placeholder="SL value" class="num border border-[var(--border)] rounded px-2 py-1.5">
+      </div>
+
+      <div class="flex flex-wrap justify-end gap-2 pt-1">
+        <button @click="savePreset()" class="text-[12px] px-4 py-1.5 rounded border border-accent-200 text-accent-700">Save as preset</button>
+        <button @click="save()" class="text-[12px] px-5 py-1.5 rounded-md bg-accent-600 text-white font-bold">Execute (take trade)</button>
+      </div>
+      <div class="text-[11px] text-right" x-text="nsStatus"></div>
+    </div>
+  </div>
+
+  <!-- ══════════ TRADES ══════════ -->
+  <div x-show="tab==='trades'" class="space-y-2">
+    <div x-show="(d.strategies||[]).length" class="flex items-center gap-2">
+      <input x-model="tq" placeholder="Search trades — name, NIFTY, strike…" class="flex-1 text-[12px] border border-[var(--border)] rounded-lg px-3 py-2">
+      <span class="text-[11px] text-[var(--text-3)] num" x-text="tFilter().length+' shown'"></span>
+    </div>
+    <div x-show="!(d.strategies||[]).length" class="card p-10 text-center text-[var(--text-3)] text-[13px]">No trades yet. Take one from <b>Take a trade</b>.</div>
+    <template x-for="s in tFilter()" :key="s.id">
+      <div class="card p-0 overflow-hidden">
+        <div class="flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-[var(--bg)]" @click="expand = expand===s.id?null:s.id">
+          <div class="flex items-center gap-2.5">
+            <span class="w-2.5 h-2.5 rounded-full" :class="dot(s)"></span>
+            <div>
+              <div class="font-bold text-[13px]" x-text="s.name"></div>
+              <div class="text-[11px] text-[var(--text-3)] num"><span x-text="s.instrument"></span><span x-show="s.ce_strike"> · CE <b x-text="s.ce_strike"></b></span><span x-show="s.pe_strike"> · PE <b x-text="s.pe_strike"></b></span> · <span x-text="s.lots"></span> lots<span x-show="s.status==='ENTERED' && s.entry?.at" class="text-accent-700"> · filled <b x-text="fillAgo(s)"></b></span></div>
+            </div>
+          </div>
+          <div class="flex items-center gap-3">
+            <span class="pill" :class="statusClass(s)" x-text="statusLabel(s)"></span>
+            <span class="num text-[13px] font-bold" :class="pnl(s)>=0?'text-gain-600':'text-loss-600'" x-show="s.status==='ENTERED'" x-text="money(pnl(s))"></span>
+            <span class="text-[10px] text-[var(--text-3)]" x-text="expand===s.id?'▲':'▼'"></span>
+          </div>
+        </div>
+
+        <!-- details drawer -->
+        <div x-show="expand===s.id" class="border-t border-[var(--border)] px-4 py-3 space-y-3">
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-2 text-[12px] num">
+            <div><div class="text-[10px] uppercase text-[var(--text-3)]">Entry trigger</div><div x-text="trigText(s)"></div></div>
+            <div><div class="text-[10px] uppercase text-[var(--text-3)]">Filled @ / when</div>
+              <div x-text="s.entry?.combined!=null?('₹'+s.entry.combined):'—'"></div>
+              <div class="text-[10px] text-[var(--text-3)]" x-show="s.entry?.at" x-text="fillWhen(s)"></div></div>
+            <div><div class="text-[10px] uppercase text-[var(--text-3)]">Live combined</div><div x-text="s.live?.combined!=null?('₹'+s.live.combined):'—'"></div></div>
+            <div><div class="text-[10px] uppercase text-[var(--text-3)]">P&L</div><div :class="pnl(s)>=0?'text-gain-600':'text-loss-600'" x-text="money(pnl(s))"></div></div>
+          </div>
+
+          <!-- RUNNING (not filled) → edit / mark filled / cancel -->
+          <div x-show="s.status==='ARMED'" class="space-y-2">
+            <div class="text-[11px]" :class="mkt.market_open?'text-[var(--text-3)]':'text-warn-600'" x-text="mkt.market_open?'Running — watching for the entry level. You\'ll get a pop-up when it hits.':'Market closed — this stays running and will watch the entry when the market opens.'"></div>
+            <div class="flex flex-wrap gap-2">
+              <button @click="markEnter(s)" class="text-[12px] px-3 py-1.5 rounded-md bg-accent-600 text-white font-semibold">Mark filled (I took the real trade)</button>
+              <button @click="mark(s,'cancel')" class="text-[12px] px-3 py-1.5 rounded-md border border-[var(--border)]">Cancel</button>
+            </div>
+          </div>
+
+          <!-- FILLED (live) → set TP / SL here -->
+          <div x-show="s.status==='ENTERED'" class="space-y-2">
+            <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Take profit / Stop loss</div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div class="flex items-center gap-2">
+                <select x-model="s._tpmode" class="border border-[var(--border)] rounded px-2 py-1 text-[11px]"><option value="premium">combined ≤</option><option value="profit">profit ≥ ₹</option></select>
+                <input x-model.number="s._tpval" type="number" step="0.05" placeholder="value" class="num border border-[var(--border)] rounded px-2 py-1 text-[11px] flex-1">
+                <button @click="saveExit(s)" class="text-[11px] px-3 py-1 rounded bg-gain-500 text-white font-semibold">Set TP</button>
+              </div>
+              <div class="flex items-center gap-2">
+                <select x-model="s._slmode" class="border border-[var(--border)] rounded px-2 py-1 text-[11px]"><option value="premium">combined ≥</option><option value="loss">loss ≥ ₹</option></select>
+                <input x-model.number="s._slval" type="number" step="0.05" placeholder="value" class="num border border-[var(--border)] rounded px-2 py-1 text-[11px] flex-1">
+                <button @click="saveExit(s)" class="text-[11px] px-3 py-1 rounded bg-loss-500 text-white font-semibold">Set SL</button>
+              </div>
+            </div>
+            <div class="text-[11px] text-[var(--text-3)]" x-show="s.tp||s.sl"><span x-show="s.tp">TP <b x-text="exitLabel(s.tp)"></b></span><span x-show="s.sl"> · SL <b x-text="exitLabel(s.sl)"></b></span></div>
+            <button @click="mark(s,'close')" class="text-[12px] px-3 py-1.5 rounded-md border border-[var(--border)]">Close trade</button>
+          </div>
+
+          <!-- closed -->
+          <div x-show="['TP_HIT','SL_HIT','CLOSED','CANCELLED'].includes(s.status)" class="flex items-center justify-between text-[12px] num">
+            <span class="text-[var(--text-3)]">Exited @ <b x-text="s.exit?.combined ?? '—'"></b> · <span x-text="((s.exit?.at)||(s.closed_at)||'').slice(0,16).replace('T',' ')"></span></span>
+            <button @click="mark(s,'delete')" class="text-[11px] text-loss-600">✕ remove</button>
+          </div>
+        </div>
+      </div>
+    </template>
+  </div>
+
+  <div class="text-[10px] text-[var(--text-3)]">Monitor polls live premiums every 20s while the market is open. No live orders are placed — this mirrors your real trade for a side-by-side later.</div>
+</div>
+
+<script>
+function execDesk(){
+  return {
+    d:{strategies:[]}, presets:[], alerts:[], mkt:{}, tab:'take', expand:null, nsStatus:'', lastCheck:'', pv:null,
+    toasts:[], lastEventTs:0, tq:'',
+    tFilter(){ const q=(this.tq||'').toLowerCase().trim(); const ss=this.d.strategies||[]; if(!q) return ss;
+      return ss.filter(s=>((s.name||'')+' '+(s.instrument||'')+' '+(s.ce_strike||'')+' '+(s.pe_strike||'')+' '+(s.status||'')).toLowerCase().includes(q)); },
+    ns:{ name:'', instrument:'NIFTY', mode:'strangle', strikeMode:'pct', ce_distance_pct:2.0, pe_distance_pct:2.0, ce_pts:1000, pe_pts:1000, lots:1,
+         trigger_mode:'COMBINED', combined_threshold:null, yield_per_cr:null, ce_threshold:null, pe_threshold:null,
+         _tpmode:'premium', _tpval:null, _slmode:'premium', _slval:null },
+    async init(){
+      try{ if(window.Notification && Notification.permission==='default') Notification.requestPermission(); }catch(e){}
+      await this.load(); await this.loadPresets(); await this.preview(); await this.pollEvents(); await this.checkNow();
+      setInterval(()=>this.checkNow(), 20000);
+      setInterval(()=>this.pollEvents(), 15000);
+    },
+    notify(title, body, kind){
+      const id=Date.now()+Math.round(performance.now());
+      this.toasts.unshift({id, title, body, kind});
+      setTimeout(()=>{ this.toasts=this.toasts.filter(t=>t.id!==id); }, 9000);
+      try{ if(window.Notification && Notification.permission==='granted') new Notification(title,{body}); }catch(e){}
+    },
+    async pollEvents(){
+      try{ const j=await fetch('/api/dummy/events?since='+this.lastEventTs).then(r=>r.json());
+        (j.events||[]).forEach(e=>{ this.lastEventTs=Math.max(this.lastEventTs,e.ts);
+          const kind=e.type==='error'?'sl':e.type==='auto_stop'?'sl':'info';
+          this.notify(e.type==='auto_start'?'⏰ Strategy auto-started':e.type==='auto_stop'?'⏹ Scheduled stop':'⚠️ Schedule error', e.msg, kind); });
+        if(j.events&&j.events.length){ await this.load(); }
+        else if(!this.lastEventTs && j.now){ this.lastEventTs=j.now; }   // first poll: ignore history
+      }catch(e){}
+    },
+    async setSched(p, patch){
+      Object.assign(p, patch);
+      try{ await fetch('/api/dummy/schedule/'+p.id,{method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({sched_start:p.sched_start||'', sched_stop:p.sched_stop||'', sched_enabled:!!p.sched_enabled})}); }catch(e){}
+      await this.loadPresets();
+    },
+    money(v){ if(v==null) return '—'; const s=v<0?'−':'+'; const a=Math.abs(v); if(a>=1e7) return s+'₹'+(a/1e7).toFixed(2)+'Cr'; if(a>=1e5) return s+'₹'+(a/1e5).toFixed(2)+'L'; return s+'₹'+Math.round(a).toLocaleString('en-IN'); },
+    async load(){ try{ this.d=await fetch('/api/dummy/list').then(r=>r.json()); this.mkt=this.d.market||{}; (this.d.strategies||[]).forEach(s=>{ s._tpmode=s.tp?.mode||'premium'; s._tpval=s.tp?.value; s._slmode=s.sl?.mode||'premium'; s._slval=s.sl?.value; }); }catch(e){} },
+    async loadPresets(){ try{ this.presets=(await fetch('/api/dummy/presets').then(r=>r.json())).presets||[]; }catch(e){} },
+    dot(s){ return s.status==='ENTERED'?'bg-gain-500':s.status==='ARMED'?(this.mkt.market_open?'bg-accent-500':'bg-[var(--text-3)]'):'bg-[var(--text-3)]'; },
+    statusClass(s){ return s.status==='ENTERED'?'bg-gain-100 text-gain-700':s.status==='ARMED'?(this.mkt.market_open?'bg-accent-50 text-accent-700':'bg-[var(--bg)] text-[var(--text-2)]'):'bg-[var(--bg)] text-[var(--text-3)]'; },
+    statusLabel(s){ if(s.status==='ENTERED')return 'Filled · live'; if(s.status==='ARMED')return this.mkt.market_open?'Running · watching':'Running · market closed'; if(s.status==='CANCELLED')return 'Cancelled'; return 'Closed'; },
+    trigText(s){ if(s.trigger_mode==='SEPARATE')return 'CE≥₹'+(s.ce_threshold??'?')+' PE≥₹'+(s.pe_threshold??'?'); if(s.yield_per_cr)return '≥₹'+s.yield_per_cr.toLocaleString('en-IN')+'/Cr'; if(s.combined_threshold)return 'combined ≥₹'+s.combined_threshold; return 'at market'; },
+    pnl(s){ if(!s.entry?.combined||s.live?.combined==null) return 0; const lot={NIFTY:75,SENSEX:20,BANKNIFTY:35}[s.instrument]||75; return (s.entry.combined - s.live.combined)*lot*(s.lots||1); },
+    _agoStr(iso){ if(!iso) return ''; const t=new Date(iso), now=new Date(); let m=Math.floor((now-t)/60000); if(m<0)m=0;
+      if(m<1) return 'just now'; if(m<60) return m+'m ago'; const h=Math.floor(m/60), mm=m%60; if(h<24) return h+'h '+(mm?mm+'m ':'')+'ago'; return Math.floor(h/24)+'d ago'; },
+    _hhmm(iso){ if(!iso) return ''; try{ return new Date(iso).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit',hour12:false}); }catch(e){ return (iso||'').slice(11,16); } },
+    fillAgo(s){ return this._agoStr(s.entry?.at); },
+    fillWhen(s){ const t=this._hhmm(s.entry?.at); const a=this._agoStr(s.entry?.at); return t?(t+' · '+a):a; },
+    exitLabel(x){ return x? (x.mode==='premium'?('combined '+x.value):(x.mode+' ₹'+x.value)) : ''; },
+    _distParams(){ const p={}; if(this.ns.strikeMode==='pct'){ p.ce_distance_pct=this.ns.ce_distance_pct; p.pe_distance_pct=this.ns.pe_distance_pct; } else if(this.pv?.spot){ p.ce_distance_pct=(this.ns.ce_pts/this.pv.spot*100).toFixed(2); p.pe_distance_pct=(this.ns.pe_pts/this.pv.spot*100).toFixed(2); } return p; },
+    async preview(){ try{ const q=new URLSearchParams({instrument:this.ns.instrument,mode:this.ns.mode,distance_pct:this.ns.ce_distance_pct??2}); const dp=this._distParams(); if(dp.ce_distance_pct!=null)q.set('ce_distance_pct',dp.ce_distance_pct); if(dp.pe_distance_pct!=null)q.set('pe_distance_pct',dp.pe_distance_pct); this.pv=await fetch('/api/dummy/preview?'+q).then(r=>r.json()); }catch(e){} },
+    _payload(){ const dp=this._distParams(); return {...this.ns, ...dp, tp: this.ns._tpval?{mode:this.ns._tpmode,value:Number(this.ns._tpval)}:null, sl: this.ns._slval?{mode:this.ns._slmode,value:Number(this.ns._slval)}:null}; },
+    async savePreset(){ try{ const j=await fetch('/api/dummy/preset',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(this._payload())}).then(r=>r.json()); if(j.saved){ this.nsStatus='✓ saved'; await this.loadPresets(); this.tab='presets'; } }catch(e){ this.nsStatus='✗ '+e; } },
+    async delPreset(p){ if(!confirm('Delete preset '+p.name+'?'))return; await fetch('/api/dummy/preset/'+p.id,{method:'DELETE'}); await this.loadPresets(); },
+    async save(){
+      this.nsStatus='taking…';
+      try{ const j=await fetch('/api/dummy/create',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(this._payload())}).then(r=>r.json());
+        if(j.saved){ this.nsStatus='✓ trade taken — see Trades'; this.tab='trades'; await this.load(); await this.checkNow(); } else this.nsStatus='✗ '+(j.error||'failed'); }catch(e){ this.nsStatus='✗ '+e; } },
+    async armPreset(p){ try{ const j=await fetch('/api/dummy/arm-preset/'+p.id,{method:'POST'}).then(r=>r.json()); if(j.saved){ this.tab='trades'; await this.load(); await this.checkNow(); } else alert(j.error||'failed'); }catch(e){ alert(e); } },
+    async markEnter(s){ if(!confirm('Mark "'+s.name+'" as filled — you took the real trade?'))return; await fetch('/api/dummy/mark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:s.id,action:'enter',instrument:s.instrument,ce_strike:s.ce_strike,pe_strike:s.pe_strike})}); await this.load(); },
+    async mark(s,act){ if(act!=='close'&&!confirm(act+' "'+s.name+'"?'))return; await fetch('/api/dummy/mark',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:s.id,action:act})}); await this.load(); },
+    async saveExit(s){ const tp=s._tpval?{mode:s._tpmode,value:Number(s._tpval)}:null; const sl=s._slval?{mode:s._slmode,value:Number(s._slval)}:null; await fetch('/api/dummy/exit-levels',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:s.id,tp,sl})}); await this.load(); },
+    async checkNow(){ try{ const j=await fetch('/api/dummy/check',{method:'POST'}).then(r=>r.json()); this.lastCheck=j.checked_at||'';
+      (j.fired||[]).forEach(f=>{ const k=f.id+f.fired; if(!this.alerts.find(a=>a.key===k)){ this.alerts.unshift({...f,key:k});
+        const title = f.fired==='SL'?('🚨 STOP-LOSS hit — '+f.name) : f.fired==='TP'?('✅ Target hit — '+f.name) : ('▶ Entry filled — '+f.name);
+        const body = (f.instrument||'')+' '+(f.ce_strike?('CE '+f.ce_strike):'')+(f.pe_strike?(' / PE '+f.pe_strike):'')+(f.premium?.combined!=null?(' · combined ₹'+f.premium.combined):'');
+        this.notify(title, body, f.fired==='SL'?'sl':f.fired==='TP'?'tp':'info'); } });
+      await this.load(); }catch(e){} },
+  };
+}
+</script>
+{% endblock %}

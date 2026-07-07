@@ -1,0 +1,993 @@
+{% extends "base.html" %}
+{% block title %}Reporting · Theta Quant{% endblock %}
+
+{% block content %}
+<div class="space-y-5" x-data="reportingApp()" x-init="init()">
+
+ <!-- Header: period nav + actions -->
+ <div class="text-[11px] flex flex-wrap gap-x-3 gap-y-1 mb-1">
+  <a href="/report-full" class="text-[var(--blue)] font-semibold">Full Reporting →</a>
+  <a href="/expiry/desk" class="text-[var(--blue)]">Expiry Desk</a>
+  <a href="/expiry/timing" class="text-[var(--blue)]">Sell Timing</a>
+  <a href="/playbook" class="text-[var(--blue)]">Strategy</a>
+  <a href="/builder" class="text-[var(--blue)]">Builder</a>
+  <a href="/margin" class="text-[var(--blue)]">Margin</a>
+ </div>
+ <div class="flex flex-wrap items-center justify-between gap-3">
+ <div class="flex items-center gap-3 flex-wrap">
+ <h1 class="text-xl font-bold tracking-tight">Reporting</h1>
+ <!-- period mode -->
+ <div class="flex rounded-md border border-[var(--border)] overflow-hidden text-[11px]">
+ <template x-for="m in ['day','month','range','FY','quarter']" :key="m">
+ <button @click="setPeriod(m)" class="px-2.5 py-1.5 capitalize" :class="period===m ? 'bg-[var(--text-1)] text-[var(--surface)]' : ''" x-text="m"></button>
+ </template>
+ </div>
+ <!-- DAY -->
+ <select x-show="period==='day'" x-model="selDate" @change="loadDay()" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5 num">
+ <template x-for="d in days" :key="d.date">
+ <option :value="d.date" x-text="d.date + ' · ' + d.n + ' strat' + (d.booked ? ' · ₹' + d.booked.toLocaleString('en-IN') : '')"></option>
+ </template>
+ </select>
+ <!-- MONTH -->
+ <input x-show="period==='month'" type="month" x-model="monthSel" @change="fetchRange()" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5 num">
+ <!-- RANGE -->
+ <template x-if="period==='range'">
+ <div class="flex items-center gap-1.5 text-[12px]">
+ <input type="date" x-model="rangeStart" @change="fetchRange()" class="border border-[var(--border)] rounded-md px-2 py-1.5 num">
+ <span class="text-[var(--text-3)]">→</span>
+ <input type="date" x-model="rangeEnd" @change="fetchRange()" class="border border-[var(--border)] rounded-md px-2 py-1.5 num">
+ </div>
+ </template>
+ <!-- FY / QUARTER -->
+ <select x-show="period==='FY'" x-model="fySel" @change="fetchRange()" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5 num">
+ <template x-for="fy in fyList" :key="fy"><option :value="fy" x-text="'FY ' + fy"></option></template>
+ </select>
+ <template x-if="period==='quarter'">
+ <div class="flex items-center gap-1.5 text-[12px]">
+ <select x-model="fySel" @change="fetchRange()" class="border border-[var(--border)] rounded-md px-2 py-1.5 num"><template x-for="fy in fyList" :key="fy"><option :value="fy" x-text="'FY '+fy"></option></template></select>
+ <select x-model="qSel" @change="fetchRange()" class="border border-[var(--border)] rounded-md px-2 py-1.5"><option value="Q1">Q1 Apr-Jun</option><option value="Q2">Q2 Jul-Sep</option><option value="Q3">Q3 Oct-Dec</option><option value="Q4">Q4 Jan-Mar</option></select>
+ </div>
+ </template>
+ <button @click="period==='day' ? loadDay() : fetchRange()" class="text-[11px] px-2 py-1 rounded-md border border-[var(--border)]">↻</button>
+ </div>
+ <div class="flex gap-2">
+ <button @click="settleExpired()" class="text-[12px] px-3 py-1.5 rounded-md border border-[var(--border)] font-medium" title="Book all open legs of today-expiring index at settlement (0 if OTM)">Settle expired</button>
+ <button @click="showCosts = !showCosts; if (showCosts) loadCosts()" class="text-[12px] px-3 py-1.5 rounded-md border border-[var(--border)] font-medium">Costs</button>
+ <button @click="showIngest = !showIngest" class="text-[12px] px-3 py-1.5 rounded-md border border-[var(--border)] font-medium">Import</button>
+ <button @click="openNew()" class="text-[12px] px-4 py-1.5 rounded-md bg-accent-600 text-white font-bold">+ New Strategy</button>
+ </div>
+ </div>
+
+ <!-- ============ DAY VIEW ============ -->
+ <div x-show="period==='day'" class="space-y-5">
+ <!-- Dashboard strip -->
+ <div class="card grid grid-cols-2 md:grid-cols-8 divide-x divide-[var(--border)]">
+ <div class="px-4 py-3">
+ <div class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">Total P&L</div>
+ <div class="num text-[20px] font-bold" :class="(dv().total ?? 0) >= 0 ? 'text-gain-600':'text-loss-600'"
+ x-text="fmtMoney(dv().total)"></div>
+ <div class="text-[10px] text-[var(--text-3)] num" x-show="dv().costs">net <span x-text="fmtMoney(dv().net_total)"></span> after ₹<span x-text="(dv().costs ?? 0).toLocaleString('en-IN')"></span> costs</div>
+ </div>
+ <div class="px-4 py-3">
+ <div class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">Unbooked</div>
+ <div class="num text-[20px] font-bold" :class="(dv().unbooked ?? 0) >= 0 ? 'text-gain-600':'text-loss-600'"
+ x-text="fmtMoney(dv().unbooked)"></div>
+ </div>
+ <div class="px-4 py-3">
+ <div class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">Booked</div>
+ <div class="num text-[20px] font-bold" :class="(dv().booked ?? 0) >= 0 ? 'text-gain-600':'text-loss-600'"
+ x-text="fmtMoney(dv().booked)"></div>
+ </div>
+ <div class="px-4 py-3">
+ <div class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">Max profit</div>
+ <div class="num text-[20px] font-bold" :class="(dv().max_profit ?? 0) >= 0 ? 'text-gain-600':'text-loss-600'" x-text="fmtMoney(dv().max_profit)"></div>
+ <div class="text-[10px] text-[var(--text-3)]">open premium + booked P&L</div>
+ </div>
+ <div class="px-4 py-3">
+ <div class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">Margin used</div>
+ <div class="num text-[20px] font-bold" x-text="dv().margin_used ? '₹' + (dv().margin_used/1e7).toFixed(1) + 'Cr' : '—'"></div>
+ <div class="text-[10px] text-[var(--text-3)] num" x-text="dv().yield_on_margin_pct != null ? ('yield ' + dv().yield_on_margin_pct + '%') : ''"></div>
+ </div>
+ <div class="px-4 py-3">
+ <div class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">Yield / Cr</div>
+ <div class="num text-[20px] font-bold" :class="(dv().pnl_per_cr ?? 0) >= 0 ? 'text-gain-600':'text-loss-600'" x-text="dv().pnl_per_cr != null ? fmtMoney(dv().pnl_per_cr) : '—'"></div>
+ <div class="text-[10px] text-[var(--text-3)] num" x-text="dv().maxprofit_per_cr != null ? ('max ₹' + dv().maxprofit_per_cr.toLocaleString('en-IN') + '/Cr') : 'add margin'"></div>
+ </div>
+ <div class="px-4 py-3">
+ <div class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mb-1">By broker</div>
+ <template x-for="[b, v] in Object.entries(dv().by_broker || {})">
+ <div class="num text-[11px]"><span x-text="b"></span>: <b :class="v.pnl >= 0 ? 'text-gain-600':'text-loss-600'" x-text="fmtMoney(v.pnl)"></b></div>
+ </template>
+ </div>
+ <div class="px-4 py-3">
+ <div class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mb-1">By tier</div>
+ <template x-for="[t, v] in Object.entries(dv().by_tier || {})">
+ <div class="num text-[11px]"><span x-text="t"></span>: <b :class="v.pnl >= 0 ? 'text-gain-600':'text-loss-600'" x-text="fmtMoney(v.pnl)"></b></div>
+ </template>
+ </div>
+ </div>
+
+ <!-- Filters -->
+ <div class="flex flex-wrap gap-2 items-center">
+ <span class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Filter:</span>
+ <!-- broker: All + each -->
+ <button @click="fBroker=''" class="text-[11px] px-2.5 py-1 rounded-full border"
+ :class="!fBroker ? 'bg-[var(--text-1)] text-[var(--surface)] border-transparent' : 'border-[var(--border)]'">All brokers</button>
+ <template x-for="b in brokerList()" :key="b">
+ <button @click="fBroker = (fBroker===b ? '' : b)" class="text-[11px] px-2.5 py-1 rounded-full border"
+ :class="fBroker===b ? 'bg-[var(--text-1)] text-[var(--surface)] border-transparent' : 'border-[var(--border)]'" x-text="b"></button>
+ </template>
+ <span class="w-px h-4 bg-[var(--border)]"></span>
+ <!-- tier: All + each -->
+ <button @click="fTier=''" class="text-[11px] px-2.5 py-1 rounded-full border"
+ :class="!fTier ? 'bg-accent-600 text-white border-transparent' : 'border-[var(--border)]'">All tiers</button>
+ <template x-for="t in tierList()" :key="t">
+ <button @click="fTier = (fTier===t ? '' : t)" class="text-[11px] px-2.5 py-1 rounded-full border"
+ :class="fTier===t ? 'bg-accent-600 text-white border-transparent' : 'border-[var(--border)]'" x-text="t"></button>
+ </template>
+ <template x-if="dematList().length > 1">
+ <span class="w-px h-4 bg-[var(--border)]"></span>
+ </template>
+ <button x-show="dematList().length > 1" @click="fDemat=''" class="text-[11px] px-2.5 py-1 rounded-full border"
+ :class="!fDemat ? 'bg-warn-500 text-white border-transparent' : 'border-[var(--border)]'">All demats</button>
+ <template x-for="dm in dematList()" :key="dm">
+ <button x-show="dematList().length > 1" @click="fDemat = (fDemat===dm ? '' : dm)" class="text-[11px] px-2.5 py-1 rounded-full border"
+ :class="fDemat===dm ? 'bg-warn-500 text-white border-transparent' : 'border-[var(--border)]'" x-text="'' + dm"></button>
+ </template>
+ <button x-show="fBroker||fTier||fDemat" @click="fBroker='';fTier='';fDemat=''" class="text-[11px] px-2.5 py-1 rounded-full border border-loss-300 text-loss-600">✕ Clear all</button>
+ <select x-model="sortBy" class="text-[11px] border border-[var(--border)] rounded-md px-2 py-1 ml-2">
+ <option value="pnl">Sort: P&L</option>
+ <option value="max_profit">Sort: Max profit</option>
+ <option value="margin">Sort: Margin</option>
+ <option value="tier">Sort: Tier</option>
+ <option value="broker">Sort: Broker</option>
+ <option value="demat">Sort: Demat</option>
+ <option value="entry_time">Sort: Entry time</option>
+ </select>
+ <input x-model="q" placeholder="search name / NIFTY / strike…" class="text-[11px] border border-[var(--border)] rounded-md px-2 py-1 w-44 ml-2">
+ <span class="text-[11px] text-[var(--text-3)] ml-auto num" x-text="filtered().length + ' of ' + (day.strategies||[]).length + ' strategies · ' + (day.computed_at || '')"></span>
+ </div>
+
+ <!-- Costs settings panel -->
+ <div x-show="showCosts" x-cloak class="card p-4">
+ <div class="text-[12px] font-bold mb-1">Cost & charges config <span class="font-normal text-[var(--text-3)]">— brokerage ₹/lot (both executed sides), the rest are % of value. Demat rows override their broker. Until broker-API auto-parse, edit here.</span></div>
+ <div class="overflow-x-auto">
+ <div class="grid grid-cols-7 gap-2 text-[9px] uppercase text-[var(--text-3)] mt-2 mb-1 font-semibold min-w-[620px]">
+ <span>Broker</span><span>₹/lot</span><span>STT %</span><span>Txn %</span><span>GST %</span><span>Stamp %</span><span>SEBI ₹/cr</span></div>
+ <template x-for="(row, i) in costRows" :key="i">
+ <div class="grid grid-cols-7 gap-2 mb-1 items-center min-w-[620px]">
+ <input x-model="row.broker" placeholder="Broker" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model.number.lazy="row.brokerage_per_lot" type="number" step="0.5" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model.number.lazy="row.stt_pct" type="number" step="0.0001" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model.number.lazy="row.txn_pct" type="number" step="0.001" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model.number.lazy="row.gst_pct" type="number" step="1" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model.number.lazy="row.stamp_pct" type="number" step="0.001" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <div class="flex gap-1"><input x-model.number.lazy="row.sebi_per_cr" type="number" step="1" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1 w-full">
+ <button @click="costRows.splice(i,1)" class="text-[11px] text-loss-600" x-show="row.broker !== 'default'">✕</button></div>
+ </div>
+ </template>
+ </div>
+ <button @click="costRows.push({broker:'', brokerage_per_lot:10, stt_pct:0.0625, txn_pct:0.035, gst_pct:18, stamp_pct:0.003, sebi_per_cr:10})" class="text-[11px] px-3 py-1 rounded-md border border-[var(--border)] mt-1">+ broker</button>
+
+ <div class="text-[11px] font-bold mt-4 mb-1">Demat overrides <span class="font-normal text-[var(--text-3)]">— optional; same fields, applied to strategies tagged with that demat</span></div>
+ <div class="overflow-x-auto">
+ <div class="grid grid-cols-7 gap-2 text-[9px] uppercase text-[var(--text-3)] mb-1 font-semibold min-w-[620px]" x-show="dematRows.length">
+ <span>Demat</span><span>₹/lot</span><span>STT %</span><span>Txn %</span><span>GST %</span><span>Stamp %</span><span>SEBI ₹/cr</span></div>
+ <template x-for="(row, i) in dematRows" :key="'d'+i">
+ <div class="grid grid-cols-7 gap-2 mb-1 items-center min-w-[620px]">
+ <input x-model="row.demat" placeholder="Demat" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model.number.lazy="row.brokerage_per_lot" type="number" step="0.5" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model.number.lazy="row.stt_pct" type="number" step="0.0001" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model.number.lazy="row.txn_pct" type="number" step="0.001" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model.number.lazy="row.gst_pct" type="number" step="1" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model.number.lazy="row.stamp_pct" type="number" step="0.001" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <div class="flex gap-1"><input x-model.number.lazy="row.sebi_per_cr" type="number" step="1" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1 w-full">
+ <button @click="dematRows.splice(i,1)" class="text-[11px] text-loss-600">✕</button></div>
+ </div>
+ </template>
+ </div>
+ <button @click="dematRows.push({demat:'', brokerage_per_lot:10, stt_pct:0.0625, txn_pct:0.035, gst_pct:18, stamp_pct:0.003, sebi_per_cr:10})" class="text-[11px] px-3 py-1 rounded-md border border-[var(--border)] mt-1">+ demat override</button>
+
+ <div class="flex gap-2 mt-3 items-center">
+ <button @click="saveCosts()" class="text-[11px] px-4 py-1.5 rounded-md bg-accent-600 text-white font-semibold">Save costs</button>
+ <span class="text-[11px]" x-text="costsStatus"></span>
+ </div>
+ </div>
+
+ <!-- Import panel -->
+ <div x-show="showIngest" x-cloak class="card p-4">
+ <div class="flex gap-2 mb-3">
+ <button @click="ingestTab='csv'" class="text-[11px] px-3 py-1 rounded-md" :class="ingestTab==='csv' ? 'bg-[var(--text-1)] text-[var(--surface)]' : 'border border-[var(--border)]'">CSV / Excel</button>
+ <button @click="ingestTab='sheet'" class="text-[11px] px-3 py-1 rounded-md" :class="ingestTab==='sheet' ? 'bg-[var(--text-1)] text-[var(--surface)]' : 'border border-[var(--border)]'">Google Sheet</button>
+ <button @click="ingestTab='shot'" class="text-[11px] px-3 py-1 rounded-md" :class="ingestTab==='shot' ? 'bg-[var(--text-1)] text-[var(--surface)]' : 'border border-[var(--border)]'">Screenshot</button>
+ <button @click="ingestTab='xlsx'" class="text-[11px] px-3 py-1 rounded-md" :class="ingestTab==='xlsx' ? 'bg-[var(--text-1)] text-[var(--surface)]' : 'border border-[var(--border)]'">Broker Excel</button>
+ </div>
+ <div x-show="ingestTab==='csv'">
+ <div class="text-[11px] text-[var(--text-2)] mb-2">Headers: <code class="text-[10px]">instrument,tier,strike,side,qty,price,entry_time,broker,note</code> · rows grouped into strategies by (tier, broker, entry_time)</div>
+ <input type="file" accept=".csv,.txt" @change="csvFile($event)" class="text-[11px] mb-2">
+ <textarea x-model="csvText" rows="4" placeholder="or paste CSV here" class="w-full text-[11px] font-mono border border-[var(--border)] rounded-md p-2"></textarea>
+ <button @click="csvSave()" class="mt-2 text-[11px] px-4 py-1.5 rounded-md bg-accent-600 text-white font-semibold">Ingest</button>
+ <span class="text-[11px] ml-2" x-text="ingestStatus"></span>
+ </div>
+ <div x-show="ingestTab==='sheet'" class="text-[12px] text-[var(--text-2)]">
+ Use the team Google Sheet → <a href="/import" class="text-accent-600 underline">Import hub</a> (same sheet format as before), or paste its CSV export in the CSV tab.
+ </div>
+ <div x-show="ingestTab==='shot'">
+ <div class="text-[12px] text-[var(--text-2)] mb-2">Upload Sensibull screenshots (phone app or web) — parsed via on-device OCR. Entry time is optional; add it later via Edit. Or send to <b>@ExpiryTrading_Bot</b> on Telegram.</div>
+ <!-- drag-drop zone + multi-select -->
+ <div @click="$refs.shotInput.click()"
+ @dragover.prevent="shotDragging=true" @dragleave.prevent="shotDragging=false"
+ @drop.prevent="shotDragging=false; shotFiles($event.dataTransfer.files)"
+ :class="shotDragging ? 'border-accent-500 bg-accent-50' : 'border-[var(--border)]'"
+ class="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer transition-colors">
+ <div class="text-[13px] font-semibold">Drop screenshots here</div>
+ <div class="text-[11px] text-[var(--text-3)] mt-0.5">or click to choose — multiple at once</div>
+ </div>
+ <input x-ref="shotInput" type="file" accept="image/*" multiple class="hidden" @change="shotFiles($event.target.files); $event.target.value=''">
+ <label class="flex items-center gap-1.5 mt-2 text-[11px] text-[var(--text-2)] cursor-pointer w-fit">
+ <input type="checkbox" x-model="shotMerge" class="w-3.5 h-3.5">
+ Merge screenshots with the same strategy name into one strategy (for big positions split across images)
+ </label>
+
+ <div x-show="shotQueue.length" class="mt-3 space-y-1.5">
+ <template x-for="item in shotQueue" :key="item.id">
+ <div class="card-flat border border-[var(--border)] px-3 py-2 flex items-center justify-between gap-2">
+ <div class="min-w-0">
+ <span class="text-[12px] font-bold" x-text="item.parsed?.portfolio_name || item.filename || '…'"></span>
+ <span class="text-[11px] text-[var(--text-2)] ml-1" x-show="item.parsed" x-text="'· ' + (item.parsed.instrument||'') + ' ' + (item.parsed.tier||'') + ' · ' + ((item.parsed.positions||[]).length) + ' legs'"></span>
+ <span class="text-[11px] text-loss-600 ml-1" x-show="item.status==='error'" x-text="'· ' + item.error"></span>
+ </div>
+ <span class="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+ :class="(item.status==='saved'||item.status==='merged') ? 'bg-gain-100 text-gain-700' : item.status==='error' ? 'bg-loss-100 text-loss-600' : 'bg-[var(--bg)] text-[var(--text-3)]'"
+ x-text="item.status==='saved' ? '✓ saved' : item.status==='merged' ? '✓ merged' : item.status"></span>
+ </div>
+ </template>
+ <div class="flex gap-2 items-center pt-1">
+ <span class="text-[11px]" x-text="shotStatus"></span>
+ <button @click="shotQueue=[]" class="text-[11px] px-3 py-1 rounded-md border border-[var(--border)] ml-auto">Clear list</button>
+ </div>
+ <div class="text-[10px] text-[var(--text-3)]">Saved automatically. Wrong tier / broker / entry time? Fix on the strategy card below via Edit.</div>
+ </div>
+ <div x-show="!shotQueue.length" class="text-[11px] mt-1" x-text="shotStatus"></div>
+ </div>
+ </div>
+
+ <div x-show="showIngest && ingestTab==='xlsx'" x-cloak class="card p-4 -mt-3">
+ <div class="text-[11px] text-[var(--text-2)] mb-2">Upload the broker-wise expiry report (.xlsx, team format: Broker/Demat/Status/Strategy/Type/Strike/Sell). Rows group by (Broker, Demat, Strategy, date). Closed rows auto-book P&L. <b>Tip: add an 'Entry Time' column (HH:MM) for timing analysis.</b></div>
+ <input type="file" accept=".xlsx,.xls" @change="xlsxUpload($event, true)" class="text-[11px] mb-2">
+ <div x-show="xlsxPreview.length" class="mt-2 overflow-x-auto">
+ <table class="data-table">
+ <thead><tr><th>Broker</th><th>Demat</th><th>Strategy</th><th>Date</th><th>Legs</th><th class="text-right">Max premium</th><th>Status</th></tr></thead>
+ <tbody><template x-for="(g,i) in xlsxPreview" :key="i">
+ <tr><td x-text="g.broker"></td><td x-text="g.demat"></td><td x-text="g.strategy"></td>
+ <td class="num" x-text="g.entry_date"></td><td class="num" x-text="g.n_legs"></td>
+ <td class="num text-right" x-text="'₹' + (g.max_premium||0).toLocaleString('en-IN')"></td>
+ <td x-text="g.closed ? 'closed' : 'open'"></td></tr>
+ </template></tbody>
+ </table>
+ <button @click="xlsxConfirm()" class="mt-2 text-[11px] px-4 py-1.5 rounded-md bg-accent-600 text-white font-semibold" x-text="'Confirm import (' + xlsxPreview.length + ' strategies)'"></button>
+ </div>
+ <div class="text-[11px] mt-1" x-text="xlsxStatus"></div>
+ </div>
+
+ <!-- Strategy cards -->
+ <div class="space-y-3">
+ <template x-for="s in filtered()" :key="s.id">
+ <div class="card p-4">
+ <div class="flex flex-wrap items-start justify-between gap-2 mb-2">
+ <div>
+ <div class="font-bold text-[14px]">
+ <span x-text="s.strategy_name || (s.instrument + ' ' + (s.tier||'') + ' (' + (s.broker||'?') + ')')"></span>
+ <span class="pill ml-2" :class="s.status==='open' ? 'bg-gain-100 text-gain-700' : 'bg-[var(--bg)] text-[var(--text-3)]'" x-text="s.status"></span>
+ </div>
+ <div class="text-[10px] text-[var(--text-3)] num mt-0.5">
+ <span x-text="s.instrument"></span> · <span x-text="s.tier"></span> · <span x-text="s.broker || '?'"></span><span x-show="s.demat"> · <span x-text="s.demat"></span></span>
+ · entry <b x-text="s.entry_time || '— (set via Edit)'" :class="!s.entry_time ? 'text-warn-600' : ''"></b>
+ <span x-show="s.exit_time"> · exit <b x-text="s.exit_time"></b></span>
+ <span x-show="s.regime_snapshot?.regime"> · regime <span x-text="s.regime_snapshot.regime"></span></span>
+ · src <span x-text="s.source"></span>
+ </div>
+ <div x-show="(s.sl && s.sl.kind) || (s.tp && s.tp.kind)" class="flex flex-wrap gap-1.5 mt-1">
+ <span x-show="s.sl && s.sl.kind" class="pill text-[9px] font-semibold" style="background:#FEE2E2;color:#B91C1C" x-text="tgSlText(s.sl)"></span>
+ <span x-show="s.tp && s.tp.kind" class="pill text-[9px] font-semibold" style="background:#DCFCE7;color:#15803D" x-text="tgTpText(s.tp)"></span>
+ </div>
+ </div>
+ <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+ <div class="text-right">
+ <div class="text-[9px] uppercase text-[var(--text-3)]">Total P&L</div>
+ <div class="num font-bold text-[16px]" :class="s.total_pnl >= 0 ? 'text-gain-600':'text-loss-600'" x-text="fmtMoney(s.total_pnl)"></div>
+ </div>
+ <div class="text-right">
+ <div class="text-[9px] uppercase text-[var(--text-3)]">Unbooked</div>
+ <div class="num text-[13px]" x-text="fmtMoney(s.unbooked_pnl)"></div>
+ </div>
+ <div class="text-right">
+ <div class="text-[9px] uppercase text-[var(--text-3)]">Booked</div>
+ <div class="num text-[13px]" x-text="fmtMoney(s.booked_pnl)"></div>
+ </div>
+ <div class="text-right" x-show="s.max_profit">
+ <div class="text-[9px] uppercase text-[var(--text-3)]">Max profit</div>
+ <div class="num text-[13px]" :class="(s.max_profit ?? 0) >= 0 ? 'text-gain-600':'text-loss-600'" x-text="fmtMoney(s.max_profit)"></div>
+ </div>
+ <div class="text-right" x-show="s.margin_used">
+ <div class="text-[9px] uppercase text-[var(--text-3)]">Margin</div>
+ <div class="num text-[13px]" x-text="'₹' + (s.margin_used/1e7).toFixed(2) + 'Cr'"></div>
+ </div>
+ <div class="text-right" x-show="s.costs" :title="s.cost_breakup ? ('Brokerage ₹'+s.cost_breakup.brokerage+' · STT ₹'+s.cost_breakup.stt+' · Txn ₹'+s.cost_breakup.txn+' · GST ₹'+s.cost_breakup.gst+' · Stamp ₹'+s.cost_breakup.stamp+' · SEBI ₹'+s.cost_breakup.sebi) : ''">
+ <div class="text-[9px] uppercase text-[var(--text-3)]">Costs ⓘ</div>
+ <div class="num text-[13px] text-[var(--text-2)]" x-text="'₹' + (s.costs ?? 0).toLocaleString('en-IN')"></div>
+ </div>
+ <div class="flex flex-col gap-1">
+ <button @click="openEdit(s)" class="text-[10px] px-2 py-0.5 rounded border border-accent-200 text-accent-700 hover:bg-accent-50"> Edit / Add</button>
+ <button x-show="s.status==='open'" @click="openClose(s)" class="text-[10px] px-2 py-0.5 rounded border border-[var(--border)] hover:bg-[var(--bg)]">Close…</button>
+ <button @click="tgWhatsApp(tgTradeText(s))" class="text-[10px] px-2 py-0.5 rounded border font-semibold" style="border-color:#25D36688;color:#1DA851" title="Forward this trade to WhatsApp">↗ WhatsApp</button>
+ <button @click="delStrategy(s)" class="text-[10px] px-2 py-0.5 rounded border border-loss-100 text-loss-600 hover:bg-loss-50">Delete</button>
+ </div>
+ </div>
+ </div>
+ <div class="overflow-x-auto"><table class="data-table">
+ <thead><tr><th>Leg</th><th class="text-right">Qty</th><th class="text-right">Avg</th><th class="text-right">LTP</th><th class="text-right">P&L</th></tr></thead>
+ <tbody>
+ <template x-for="(l, li) in s.legs.filter(l => (l.qty||0) !== 0)" :key="li">
+ <tr>
+ <td class="num"><span x-text="l.strike"></span> <span x-text="l.side"></span><span x-show="l.demat" class="text-[9px] text-[var(--text-3)] ml-1">· <span x-text="l.demat"></span></span></td>
+ <td class="num text-right" x-text="(l.qty||0).toLocaleString('en-IN')"></td>
+ <td class="num text-right" x-text="'₹' + (l.price ?? '—')"></td>
+ <td class="num text-right" x-text="l.ltp != null ? '₹' + l.ltp : '—'"></td>
+ <td class="num text-right" :class="(l.pnl ?? 0) >= 0 ? 'text-gain-600':'text-loss-600'" x-text="l.pnl != null ? fmtMoney(l.pnl) : '—'"></td>
+ </tr>
+ </template>
+ <template x-for="(b, bi) in (s.booked_legs||[])" :key="'b'+bi">
+ <tr class="opacity-60">
+ <td class="num"><span x-text="b.strike"></span> <span x-text="b.side"></span> <span class="text-[9px]">✓ booked <span x-text="b.exit_time"></span></span></td>
+ <td class="num text-right" x-text="b.qty.toLocaleString('en-IN')"></td>
+ <td class="num text-right">—</td>
+ <td class="num text-right" x-text="'exit ₹' + b.exit_price"></td>
+ <td class="num text-right" :class="(b.pnl||0) >= 0 ? 'text-gain-600':'text-loss-600'" x-text="fmtMoney(b.pnl)"></td>
+ </tr>
+ </template>
+ </tbody>
+ </table></div>
+ <div x-show="s.note" class="text-[10px] text-[var(--text-3)] mt-1" x-text="' ' + s.note"></div>
+ </div>
+ </template>
+ <div x-show="filtered().length === 0" class="card p-10 text-center text-[var(--text-3)] text-[13px]">
+ No strategies for this day/filter. Click <b>+ New Strategy</b> or <b>Import</b>.
+ </div>
+ </div>
+ </div><!-- /DAY VIEW -->
+
+ <!-- ============ PERIOD (month/range/FY/quarter) REPORT ============ -->
+ <div x-show="period!=='day'" class="space-y-4">
+ <div class="text-[12px] text-[var(--text-3)]" x-text="rangeData ? (rangeData.start + ' → ' + rangeData.end + ' · grouped by expiry month · realized (booked) P&L · ' + (rangeData.strategies||[]).length + ' strategies') : 'pick a period'"></div>
+ <!-- totals strip -->
+ <div class="card grid grid-cols-2 md:grid-cols-5 divide-x divide-[var(--border)]" x-show="rangeData">
+ <div class="px-4 py-3"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Net P&L</div>
+ <div class="num text-[20px] font-bold" :class="(rangeData?.totals?.net??0)>=0?'text-gain-600':'text-loss-600'" x-text="fmtMoney(rangeData?.totals?.net)"></div>
+ <div class="text-[10px] text-[var(--text-3)] num">booked <span x-text="fmtMoney(rangeData?.totals?.booked)"></span></div></div>
+ <div class="px-4 py-3"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Total costs</div>
+ <div class="num text-[20px] font-bold text-loss-600" x-text="'−₹'+(rangeData?.totals?.costs??0).toLocaleString('en-IN')"></div></div>
+ <div class="px-4 py-3"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Max profit</div>
+ <div class="num text-[20px] font-bold text-gain-600" x-text="fmtMoney(rangeData?.totals?.max_profit)"></div></div>
+ <div class="px-4 py-3"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Strategies</div>
+ <div class="num text-[20px] font-bold" x-text="rangeData?.totals?.n ?? 0"></div></div>
+ <div class="px-4 py-3"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Trading days</div>
+ <div class="num text-[20px] font-bold" x-text="(rangeData?.days||[]).length"></div></div>
+ </div>
+ <!-- grouped breakdowns -->
+ <div class="grid md:grid-cols-3 gap-4" x-show="rangeData">
+ <template x-for="[label, mapKey] in [['By broker','by_broker'],['By tier','by_tier'],['By demat','by_demat']]" :key="mapKey">
+ <div class="card p-4">
+ <div class="text-[11px] uppercase text-[var(--text-3)] font-semibold mb-2" x-text="label"></div>
+ <table class="data-table">
+ <thead><tr><th x-text="label.replace('By ','')"></th><th class="text-right">Booked</th><th class="text-right">Costs</th><th class="text-right">Net</th></tr></thead>
+ <tbody>
+ <template x-for="[k,v] in Object.entries(rangeData[mapKey]||{})" :key="k">
+ <tr><td x-text="k"></td>
+ <td class="num text-right" x-text="fmtMoney(v.booked)"></td>
+ <td class="num text-right text-[var(--text-3)]" x-text="'₹'+v.costs.toLocaleString('en-IN')"></td>
+ <td class="num text-right font-bold" :class="v.net>=0?'text-gain-600':'text-loss-600'" x-text="fmtMoney(v.net)"></td></tr>
+ </template>
+ </tbody>
+ </table>
+ </div>
+ </template>
+ </div>
+ <!-- per-day table -->
+ <div class="card p-4" x-show="rangeData">
+ <div class="text-[11px] uppercase text-[var(--text-3)] font-semibold mb-2">Day by day</div>
+ <div class="overflow-x-auto"><table class="data-table">
+ <thead><tr><th>Date</th><th class="text-right">Strategies</th><th class="text-right">Booked</th><th class="text-right">Costs</th><th class="text-right">Net</th><th class="text-right">Max profit</th></tr></thead>
+ <tbody>
+ <template x-for="dr in (rangeData?.days||[])" :key="dr.date">
+ <tr class="cursor-pointer hover:bg-[var(--bg)]" @click="period='day'; selDate=dr.date; loadDay()">
+ <td class="num" x-text="dr.date"></td>
+ <td class="num text-right" x-text="dr.n"></td>
+ <td class="num text-right" x-text="fmtMoney(dr.booked)"></td>
+ <td class="num text-right text-[var(--text-3)]" x-text="'₹'+dr.costs.toLocaleString('en-IN')"></td>
+ <td class="num text-right font-bold" :class="dr.net>=0?'text-gain-600':'text-loss-600'" x-text="fmtMoney(dr.net)"></td>
+ <td class="num text-right text-gain-600" x-text="fmtMoney(dr.max_profit)"></td>
+ </tr>
+ </template>
+ </tbody>
+ </table></div>
+ <div x-show="!(rangeData?.days||[]).length" class="text-center text-[var(--text-3)] text-[12px] py-6">No trades in this period.</div>
+ </div>
+ </div>
+
+ <!-- New Strategy modal -->
+ <div x-show="showNew" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3" @click.self="showNew=false">
+ <div class="bg-[var(--surface)] rounded-xl p-4 sm:p-6 w-[95vw] max-w-[680px] max-h-[88vh] overflow-y-auto shadow-2xl">
+ <div class="font-bold text-[15px] mb-4">New Strategy</div>
+ <div class="grid grid-cols-2 md:grid-cols-3 gap-2 mb-3">
+ <input x-model="ns.strategy_name" placeholder="Strategy name (e.g. 11-Jun SX Deep OTM)" class="col-span-2 text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5">
+ <select x-model="ns.instrument" @change="loadChain()" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5"><option>SENSEX</option><option>NIFTY</option></select>
+ <select x-model="ns.tier" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5">
+ <option value="Tier 1">Tier 1 Deep OTM</option><option value="Tier 2">Tier 2 Mid</option><option value="Tier 3">Tier 3 Near</option><option value="Carry">E-1 Carry</option><option value="Harvest">Harvest</option>
+ </select>
+ <input x-model="ns.entry_time" placeholder="Entry HH:MM *" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5">
+ <input x-model="ns.broker" placeholder="Broker" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5">
+ <input x-model="ns.demat" @change="ns.legs.forEach(l=>{ if(!l.demat) l.demat=ns.demat })" placeholder="Default demat" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5">
+ </div>
+ <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold mb-1">Legs <span class="normal-case font-normal">(set demat per leg — same strike can repeat across demats)</span></div>
+ <template x-for="(l, i) in ns.legs" :key="i">
+ <div class="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-1">
+ <input x-model.number.lazy="l.strike" @change="prefill(l)" type="number" placeholder="Strike" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <select x-model="l.side" @change="prefill(l)" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1"><option>PE</option><option>CE</option></select>
+ <input x-model.number.lazy="l.qty" type="number" placeholder="Qty (−=short)" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model.number.lazy="l.price" type="number" step="0.05" placeholder="Price" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model="l.demat" :placeholder="ns.demat || 'Demat'" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <button @click="ns.legs.splice(i,1)" class="text-[11px] text-loss-600">✕</button>
+ </div>
+ </template>
+ <button @click="ns.legs.push({strike:0, side:'CE', qty:0, price:0, demat:ns.demat||''})" class="text-[11px] px-3 py-1 rounded-md border border-[var(--border)] mb-3">+ leg</button>
+
+ <!-- Stop-loss / Take-profit — collapsed by default; tick to expand (keeps the form clean) -->
+ <div class="flex flex-wrap gap-x-5 gap-y-1 mb-2 text-[12px]">
+ <label class="flex items-center gap-1.5 cursor-pointer select-none"><input type="checkbox" x-model="ns.slOn"> <span class="font-semibold">Add stop loss</span></label>
+ <label class="flex items-center gap-1.5 cursor-pointer select-none"><input type="checkbox" x-model="ns.tpOn"> <span class="font-semibold">Add take profit</span></label>
+ </div>
+ <div x-show="ns.slOn" x-cloak class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2 items-center bg-[var(--bg)] rounded-md p-2">
+ <select x-model="ns.sl.kind" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5">
+ <option value="premium">SL: premium ≥</option><option value="spot">SL: spot near strike</option><option value="note">SL: note only</option></select>
+ <input x-show="ns.sl.kind!=='note'" x-model.number="ns.sl.value" type="number" step="0.05" :placeholder="ns.sl.kind==='premium'?'e.g. 12':'points from strike'" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5">
+ <input x-model="ns.sl.note" placeholder="SL note (optional)" class="col-span-2 text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5">
+ </div>
+ <div x-show="ns.tpOn" x-cloak class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2 items-center bg-[var(--bg)] rounded-md p-2">
+ <select x-model="ns.tp.kind" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5">
+ <option value="premium">TP: premium ≤</option><option value="profit_pct">TP: capture %</option><option value="profit_amt">TP: profit ₹</option></select>
+ <input x-model.number="ns.tp.value" type="number" step="0.05" :placeholder="ns.tp.kind==='premium'?'e.g. 14':(ns.tp.kind==='profit_pct'?'e.g. 50':'₹ amount')" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5">
+ </div>
+ <input x-model="ns.note" placeholder="Note (optional)" class="w-full text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5 mb-4">
+ <div class="flex justify-end gap-2">
+ <button @click="showNew=false" class="text-[12px] px-4 py-1.5 rounded-md border border-[var(--border)]">Discard</button>
+ <button @click="saveNew()" class="text-[12px] px-5 py-1.5 rounded-md bg-accent-600 text-white font-bold">Create</button>
+ </div>
+ <div class="text-[11px] mt-2 text-right" x-text="nsStatus"></div>
+ </div>
+ </div>
+
+ <!-- Close Strategy modal -->
+ <div x-show="showClose" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3" @click.self="showClose=false">
+ <div class="bg-[var(--surface)] rounded-xl p-4 sm:p-6 w-[95vw] max-w-[560px] max-h-[88vh] overflow-y-auto shadow-2xl">
+ <div class="font-bold text-[15px] mb-1">Close strategy</div>
+ <div class="text-[11px] text-[var(--text-3)] mb-4" x-text="(cl.strategy_name || cl.instrument) + ' · entered ' + cl.entry_time"></div>
+ <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold mb-1">Exit price per leg</div>
+ <template x-for="(l, i) in cl.exit_legs" :key="i">
+ <div class="grid grid-cols-4 gap-2 mb-1 items-center">
+ <span class="num text-[12px]"><span x-text="l.strike"></span> <span x-text="l.side"></span></span>
+ <span class="num text-[11px] text-[var(--text-3)]" x-text="'entry ₹' + l.entry_price"></span>
+ <input x-model.number.lazy="l.price" type="number" step="0.05" placeholder="Exit price" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <span class="num text-[11px]" x-text="exitLegPnl(l)"></span>
+ </div>
+ </template>
+ <input x-model="cl.exit_time" placeholder="Exit time HH:MM" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5 my-3 w-40">
+ <div class="flex justify-end gap-2">
+ <button @click="showClose=false" class="text-[12px] px-4 py-1.5 rounded-md border border-[var(--border)]">Cancel</button>
+ <button @click="saveClose()" class="text-[12px] px-5 py-1.5 rounded-md bg-loss-500 text-white font-bold">Close strategy</button>
+ </div>
+ <div class="text-[11px] mt-2 text-right" x-text="clStatus"></div>
+ </div>
+ </div>
+
+ <!-- Edit Strategy modal: change strikes/qty/price, add legs, square off individual legs -->
+ <div x-show="showEdit" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3" @click.self="showEdit=false">
+ <div class="bg-[var(--surface)] rounded-xl p-4 sm:p-6 w-[95vw] max-w-[760px] max-h-[88vh] overflow-y-auto shadow-2xl">
+ <div class="font-bold text-[15px] mb-2">Edit strategy</div>
+ <div class="grid grid-cols-2 md:grid-cols-5 gap-2 mb-4">
+ <input x-model="ed.strategy_name" placeholder="Strategy name" class="col-span-2 text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <select x-model="ed.tier" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <option value="Tier 1">Tier 1</option><option value="Tier 2">Tier 2</option><option value="Tier 3">Tier 3</option><option value="Carry">Carry</option><option value="Harvest">Harvest</option><option value="?">?</option>
+ </select>
+ <input x-model="ed.broker" placeholder="Broker" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model="ed.entry_time" placeholder="Entry HH:MM" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ </div>
+ <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold mb-1">Legs <span class="normal-case font-normal">(edit anything · ✕ removes · Sq off books a partial/full exit on that leg)</span></div>
+ <template x-for="(l, i) in ed.legs" :key="i">
+ <div class="mb-1">
+ <div class="grid grid-cols-4 sm:grid-cols-8 gap-2">
+ <input x-model.number.lazy="l.strike" type="number" placeholder="Strike" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <select x-model="l.side" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1"><option>PE</option><option>CE</option></select>
+ <input x-model.number.lazy="l.qty" type="number" placeholder="Qty (−=short)" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model.number.lazy="l.price" type="number" step="0.05" placeholder="Avg price" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model.number.lazy="l.ltp" type="number" step="0.05" placeholder="LTP (0=worthless)" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model="l.demat" placeholder="Demat" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <button @click="l.sq = !l.sq" class="text-[11px] px-2 py-1 rounded-md border" :class="l.sq ? 'border-loss-300 text-loss-600 bg-loss-50' : 'border-[var(--border)]'">Sq off…</button>
+ <button @click="removeLeg(i)" class="text-[11px] text-loss-600">✕</button>
+ </div>
+ <div x-show="l.sq" class="grid grid-cols-3 sm:grid-cols-6 gap-2 mt-1 pl-2 border-l-2 border-loss-200">
+ <input x-model.number.lazy="l.sq_qty" type="number" :placeholder="'Qty to close (max ' + Math.abs(l.qty||0) + ')'" class="num col-span-2 text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model.number.lazy="l.sq_price" type="number" step="0.05" placeholder="Exit price" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <input x-model="l.sq_time" placeholder="Exit HH:MM" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1">
+ <span class="num text-[11px] self-center" x-text="sqPreview(l)"></span>
+ <button @click="bookLeg(l)" class="text-[11px] px-2 py-1 rounded-md bg-loss-500 text-white font-semibold">Book exit</button>
+ </div>
+ </div>
+ </template>
+ <button @click="ed.legs.push({strike:0, side:'CE', qty:0, price:0, sq:false})" class="text-[11px] px-3 py-1 rounded-md border border-[var(--border)] mt-1 mb-4">+ add leg / new trade</button>
+ <div x-show="ed.booked && ed.booked.length" class="mb-3">
+ <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold mb-1">Trade history — booked exits <span class="normal-case font-normal">(edit any field → ✓ saves the correction · ✕ removes the booking; P&L recomputes)</span></div>
+ <div class="grid grid-cols-7 gap-2 text-[9px] uppercase text-[var(--text-3)] mb-0.5"><span>Leg</span><span>Qty</span><span>Entry ₹</span><span>Exit ₹</span><span>Exit time</span><span>P&L</span><span></span></div>
+ <template x-for="(b, bi) in ed.booked" :key="bi">
+ <div class="grid grid-cols-7 gap-2 items-center text-[11px] num py-0.5">
+ <span><span x-text="b.strike"></span> <span x-text="b.side"></span></span>
+ <input x-model.number.lazy="b.qty" type="number" class="num text-[11px] border border-[var(--border)] rounded px-1.5 py-0.5">
+ <input x-model.number.lazy="b.entry_price" type="number" step="0.05" class="num text-[11px] border border-[var(--border)] rounded px-1.5 py-0.5">
+ <input x-model.number.lazy="b.exit_price" type="number" step="0.05" class="num text-[11px] border border-[var(--border)] rounded px-1.5 py-0.5">
+ <input x-model.lazy="b.exit_time" class="num text-[11px] border border-[var(--border)] rounded px-1.5 py-0.5">
+ <span :class="(b.pnl||0) >= 0 ? 'text-gain-600':'text-loss-600'" x-text="fmtMoney(b.pnl)"></span>
+ <span class="flex gap-2 justify-end">
+ <button @click="saveBooking(b, bi)" class="text-gain-600 font-bold" title="save correction">✓</button>
+ <button @click="unbook(b, bi)" class="text-loss-600" title="remove booking">✕</button>
+ </span>
+ </div>
+ </template>
+ </div>
+ <div class="text-[10px] text-[var(--text-3)] mb-3">Booked exits stay recorded — editing legs here changes the OPEN position only. New trades in this strategy = + add leg with actual fill price &amp; qty.</div>
+ <!-- Stop-loss / Take-profit — same collapsible controls as New -->
+ <div class="flex flex-wrap gap-x-5 gap-y-1 mb-2 text-[12px]">
+ <label class="flex items-center gap-1.5 cursor-pointer select-none"><input type="checkbox" x-model="ed.slOn"> <span class="font-semibold">Stop loss</span></label>
+ <label class="flex items-center gap-1.5 cursor-pointer select-none"><input type="checkbox" x-model="ed.tpOn"> <span class="font-semibold">Take profit</span></label>
+ </div>
+ <div x-show="ed.slOn" x-cloak class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-2 items-center bg-[var(--bg)] rounded-md p-2">
+ <select x-model="ed.sl.kind" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5"><option value="premium">SL: premium ≥</option><option value="spot">SL: spot near strike</option><option value="note">SL: note only</option></select>
+ <input x-show="ed.sl.kind!=='note'" x-model.number="ed.sl.value" type="number" step="0.05" :placeholder="ed.sl.kind==='premium'?'e.g. 12':'points from strike'" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5">
+ <input x-model="ed.sl.note" placeholder="SL note (optional)" class="col-span-2 text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5">
+ </div>
+ <div x-show="ed.tpOn" x-cloak class="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3 items-center bg-[var(--bg)] rounded-md p-2">
+ <select x-model="ed.tp.kind" class="text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5"><option value="premium">TP: premium ≤</option><option value="profit_pct">TP: capture %</option><option value="profit_amt">TP: profit ₹</option></select>
+ <input x-model.number="ed.tp.value" type="number" step="0.05" :placeholder="ed.tp.kind==='premium'?'e.g. 14':(ed.tp.kind==='profit_pct'?'e.g. 50':'₹ amount')" class="num text-[12px] border border-[var(--border)] rounded-md px-2 py-1.5">
+ </div>
+ <div class="flex justify-end gap-2">
+ <button @click="showEdit=false" class="text-[12px] px-4 py-1.5 rounded-md border border-[var(--border)]">Cancel</button>
+ <button @click="saveEdit()" class="text-[12px] px-5 py-1.5 rounded-md bg-accent-600 text-white font-bold">Save changes</button>
+ </div>
+ <div class="text-[11px] mt-2 text-right" x-text="edStatus"></div>
+ </div>
+ </div>
+
+ <div class="text-[10px] text-[var(--text-3)]">
+ Every strategy here feeds the nightly learning loop (actual vs backtest per tier × regime). Entry time is required for timing analysis. Full merged view: <a href="/report-full" class="underline">/report-full</a>.
+ </div>
+</div>
+
+<script>
+function reportingApp() {
+ return {
+ days: [], selDate: '', day: {},
+ fBroker: '', fTier: '', fDemat: '', sortBy: 'pnl', q: '',
+ xlsxPreview: [], xlsxStatus: '', xlsxFile: null,
+ showIngest: false, ingestTab: 'csv', csvText: '', ingestStatus: '',
+ showNew: false, nsStatus: '',
+ ns: { strategy_name:'', instrument:'SENSEX', tier:'Tier 1', entry_time:'', broker:'', demat:'', note:'',
+ slOn:false, tpOn:false, sl:{kind:'premium', value:null, note:''}, tp:{kind:'premium', value:null},
+ legs: [{strike:0, side:'PE', qty:0, price:0, demat:''}, {strike:0, side:'CE', qty:0, price:0, demat:''}] },
+ chainRows: {},
+ showClose: false, cl: {}, clStatus: '',
+ showEdit: false, ed: { legs: [] }, edStatus: '',
+ showCosts: false, costRows: [], dematRows: [], costsStatus: '',
+ // period reporting
+ period: 'day', monthSel: '', rangeStart: '', rangeEnd: '', fySel: '', qSel: 'Q1',
+ fyList: [], rangeData: null,
+
+ async init() {
+ await this.loadDays();
+ // land on the latest date that isn't in the FUTURE (mis-dated import rows dated
+ // ahead of today must not hijack the default view). Fall back to today.
+ const today = new Date().toISOString().slice(0,10);
+ this.selDate = (this.days.find(d => d.date <= today)?.date) || this.days[0]?.date || today;
+ const now = new Date();
+ this.monthSel = now.toISOString().slice(0,7);
+ this.rangeEnd = now.toISOString().slice(0,10);
+ this.rangeStart = new Date(now.getTime()-30*864e5).toISOString().slice(0,10);
+ // FY starts April; label "2026-27"
+ const y = now.getFullYear(), fyStart = now.getMonth()>=3 ? y : y-1;
+ this.fyList = [0,1,2].map(i => (fyStart-i)+'-'+String(fyStart-i+1).slice(2));
+ this.fySel = this.fyList[0];
+ await this.loadDay();
+ this.loadChain();
+ setInterval(() => { if (this.period==='day' && !this.showNew && !this.showEdit && !this.showClose && !this.showIngest) this.loadDay(); }, 30000);
+ },
+ setPeriod(m) { this.period = m; if (m!=='day') this.fetchRange(); },
+ periodBounds() {
+ if (this.period==='month') { const s=this.monthSel+'-01'; const [y,mo]=this.monthSel.split('-').map(Number); const e=new Date(y,mo,0).toISOString().slice(0,10); return [s,e]; }
+ if (this.period==='range') return [this.rangeStart, this.rangeEnd];
+ // FY / quarter: fySel like "2026-27" → Apr 2026 .. Mar 2027
+ const fy0 = parseInt(this.fySel.split('-')[0]);
+ if (this.period==='FY') return [fy0+'-04-01', (fy0+1)+'-03-31'];
+ const qm = {Q1:['04-01','06-30',0], Q2:['07-01','09-30',0], Q3:['10-01','12-31',0], Q4:['01-01','03-31',1]}[this.qSel];
+ return [(fy0+qm[2])+'-'+qm[0], (fy0+qm[2])+'-'+qm[1]];
+ },
+ async fetchRange() {
+ const [s,e] = this.periodBounds();
+ if (!s || !e) return;
+ this.rangeData = null;
+ try { this.rangeData = await fetch(`/api/reporting/range?start=${s}&end=${e}`).then(r=>r.json()); }
+ catch(err) { this.rangeData = {start:s,end:e,days:[],totals:{},by_broker:{},by_tier:{},by_demat:{}}; }
+ },
+ async loadDays() {
+ try {
+ const j = await fetch('/api/reporting/days').then(r=>r.json());
+ this.days = j.days || [];
+ const today = new Date().toISOString().slice(0,10);
+ if (!this.days.find(d => d.date === today)) this.days.unshift({date: today, n: 0, booked: 0});
+ } catch(e) {}
+ },
+ async loadDay() {
+ try { this.day = await fetch('/api/reporting/day?date=' + this.selDate).then(r=>r.json()); }
+ catch(e) {}
+ },
+ async loadChain() {
+ try {
+ const c = await fetch('/api/chain/' + this.ns.instrument).then(r=>r.json());
+ const m = {}; (c.rows||[]).forEach(r => m[r.strike] = r);
+ this.chainRows = m;
+ } catch(e) {}
+ },
+ prefill(l) {
+ const row = this.chainRows[l.strike];
+ if (row && !l.price) l.price = (l.side === 'PE' ? row.pe_ltp : row.ce_ltp) || 0;
+ },
+ brokerList() { return [...new Set((this.day.strategies||[]).map(s => s.broker || '?'))]; },
+ tierList() { return [...new Set((this.day.strategies||[]).map(s => s.tier || '?'))]; },
+ dematList() {
+ const s = new Set();
+ (this.day.strategies||[]).forEach(st => {
+ (st.legs||[]).forEach(l => { if (l.demat) s.add(l.demat); });
+ (st.booked_legs||[]).forEach(l => { if (l.demat) s.add(l.demat); });
+ });
+ return [...s];
+ },
+ filtered() {
+ const qq = (this.q||'').toLowerCase().trim();
+ let out = (this.day.strategies||[]).filter(s =>
+ (!this.fBroker || (s.broker||'?') === this.fBroker) &&
+ (!this.fTier || (s.tier||'?') === this.fTier) &&
+ (!this.fDemat || (s.demat||'') === this.fDemat ||
+ (s.legs||[]).some(l => (l.demat||'') === this.fDemat) ||
+ (s.booked_legs||[]).some(l => (l.demat||'') === this.fDemat)) &&
+ (!qq || ((s.strategy_name||'')+' '+(s.instrument||'')+' '+(s.tier||'')+' '+(s.broker||'')+' '+(s.legs||[]).map(l=>l.strike).join(' ')).toLowerCase().includes(qq)));
+ const k = this.sortBy;
+ out.sort((a,b) => {
+ if (k==='pnl') return (b.total_pnl||0) - (a.total_pnl||0);
+ if (k==='max_profit') return (b.max_profit||0) - (a.max_profit||0);
+ if (k==='margin') return (b.margin_used||0) - (a.margin_used||0);
+ return String(a[k==='entry_time'?'entry_time':k]||'').localeCompare(String(b[k==='entry_time'?'entry_time':k]||''));
+ });
+ return out;
+ },
+ // dashboard totals recomputed from the CURRENTLY FILTERED strategies, so the
+ // strip always matches what's shown (pick Axis → totals are Axis only).
+ dv() {
+ const f = this.filtered();
+ const sum = k => f.reduce((a,s)=>a+(Number(s[k])||0),0);
+ const grp = key => { const o={}; f.forEach(s=>{const k=s[key]||'?'; o[k]=o[k]||{n:0,pnl:0}; o[k].n++; o[k].pnl+=(Number(s.total_pnl)||0);}); return o; };
+ const costs = sum('costs'), total = sum('total_pnl'), mp = sum('max_profit'), margin = sum('margin_used');
+ const cr = margin/1e7;
+ return {
+ total, unbooked: sum('unbooked_pnl'), booked: sum('booked_pnl'),
+ max_profit: mp, margin_used: margin, costs, net_total: total - costs,
+ yield_on_margin_pct: margin ? Math.round(mp/margin*100*1000)/1000 : null,
+ pnl_per_cr: cr ? Math.round((total-costs)/cr) : null, // net P&L per Cr margin
+ maxprofit_per_cr: cr ? Math.round(mp/cr) : null, // premium yield per Cr
+ by_broker: grp('broker'), by_tier: grp('tier'), by_demat: grp('demat'),
+ };
+ },
+
+ async xlsxUpload(ev, dry) {
+ const f = ev.target.files[0]; if (!f) return;
+ this.xlsxFile = f; this.xlsxStatus = 'parsing…'; this.xlsxPreview = [];
+ const fd = new FormData(); fd.append('file', f); fd.append('dry_run', '1');
+ try {
+ const j = await fetch('/api/journal/excel', { method:'POST', body: fd }).then(r=>r.json());
+ if (j.preview) { this.xlsxPreview = j.preview; this.xlsxStatus = '✓ ' + j.groups + ' strategies found — review & confirm'; }
+ else this.xlsxStatus = '✗ ' + (j.error || 'failed');
+ } catch(e) { this.xlsxStatus = '✗ ' + e; }
+ },
+ async xlsxConfirm() {
+ if (!this.xlsxFile) return;
+ this.xlsxStatus = 'importing…';
+ const fd = new FormData(); fd.append('file', this.xlsxFile);
+ try {
+ const j = await fetch('/api/journal/excel', { method:'POST', body: fd }).then(r=>r.json());
+ this.xlsxStatus = j.saved != null ? ('✓ ' + j.saved + ' strategies imported') : ('✗ ' + (j.error||'failed'));
+ this.xlsxPreview = []; this.xlsxFile = null;
+ await this.loadDay(); await this.loadDays();
+ } catch(e) { this.xlsxStatus = '✗ ' + e; }
+ },
+ fmtMoney(v) {
+ if (v == null) return '—';
+ const sign = v < 0 ? '−' : '+';
+ const a = Math.abs(v);
+ if (a >= 1e7) return sign + '₹' + (a/1e7).toFixed(2) + 'Cr';
+ if (a >= 1e5) return sign + '₹' + (a/1e5).toFixed(2) + 'L';
+ return sign + '₹' + Math.round(a).toLocaleString('en-IN');
+ },
+
+ openNew() { this.showNew = true; this.nsStatus = ''; this.loadChain(); },
+ async saveNew() {
+ const legs = this.ns.legs.filter(l => l.strike && l.qty)
+ .map(l => ({ strike:l.strike, side:l.side, qty:l.qty, price:l.price, demat:(l.demat || this.ns.demat || '') }));
+ if (!legs.length) { this.nsStatus = '✗ no valid legs'; return; }
+ if (!this.ns.entry_time) { this.nsStatus = '✗ entry time required'; return; }
+ this.nsStatus = 'saving…';
+ try {
+ const sl = this.ns.slOn ? this.ns.sl : null, tp = this.ns.tpOn ? this.ns.tp : null;
+ const r = await fetch('/api/journal/trade', { method:'POST', headers:{'Content-Type':'application/json'},
+ body: JSON.stringify({ ...this.ns, legs, entry_date: this.selDate, source: 'manual', sl, tp }) });
+ const j = await r.json();
+ if (j.saved) { this.showNew = false; this.ns.legs = [{strike:0, side:'PE', qty:0, price:0, demat:''}, {strike:0, side:'CE', qty:0, price:0, demat:''}]; this.ns.strategy_name=''; this.ns.slOn=false; this.ns.tpOn=false; this.ns.sl={kind:'premium',value:null,note:''}; this.ns.tp={kind:'premium',value:null}; await this.loadDays(); await this.loadDay(); }
+ else this.nsStatus = '✗ ' + (j.error || 'failed');
+ } catch(e) { this.nsStatus = '✗ ' + e; }
+ },
+
+ openClose(s) {
+ this.cl = { id: s.id, strategy_name: s.strategy_name, instrument: s.instrument, entry_time: s.entry_time,
+ exit_time: '', exit_legs: s.legs.map(l => ({strike: l.strike, side: l.side, qty: l.qty, entry_price: l.price, price: l.ltp ?? 0})) };
+ this.clStatus = ''; this.showClose = true;
+ },
+ exitLegPnl(l) {
+ if (!l.price && l.price !== 0) return '';
+ const qty = l.qty || 0;
+ const pnl = qty < 0 ? (l.entry_price - l.price) * Math.abs(qty) : (l.price - l.entry_price) * qty;
+ return this.fmtMoney(pnl);
+ },
+ async saveClose() {
+ this.clStatus = 'closing…';
+ try {
+ const r = await fetch('/api/reporting/close_strategy', { method:'POST', headers:{'Content-Type':'application/json'},
+ body: JSON.stringify({ id: this.cl.id, exit_time: this.cl.exit_time,
+ exit_legs: this.cl.exit_legs.map(l => ({strike:l.strike, side:l.side, qty:l.qty, price:l.price})) }) });
+ const j = await r.json();
+ if (j.saved) { this.showClose = false; await this.loadDay(); }
+ else this.clStatus = '✗ ' + (j.error || 'failed');
+ } catch(e) { this.clStatus = '✗ ' + e; }
+ },
+
+ async loadCosts() {
+ try {
+ const j = await fetch('/api/settings/broker_costs').then(r=>r.json());
+ const c = j.costs || {};
+ const F = ['brokerage_per_lot','stt_pct','txn_pct','gst_pct','stamp_pct','sebi_per_cr'];
+ const def = {brokerage_per_lot:10, stt_pct:0.0625, txn_pct:0.035, gst_pct:18, stamp_pct:0.003, sebi_per_cr:10};
+ this.costRows = Object.entries(c).filter(([k])=>k!=='_demats').map(([broker, v]) => {
+ const r = {broker}; F.forEach(f => r[f] = (v[f] ?? def[f])); return r; });
+ this.dematRows = Object.entries(c._demats || {}).map(([demat, v]) => {
+ const r = {demat}; F.forEach(f => r[f] = (v[f] ?? def[f])); return r; });
+ } catch(e) { this.costsStatus = '✗ ' + e; }
+ },
+ async saveCosts() {
+ const F = ['brokerage_per_lot','stt_pct','txn_pct','gst_pct','stamp_pct','sebi_per_cr'];
+ const pick = r => { const o={}; F.forEach(f => o[f] = Number(r[f])||0); return o; };
+ const costs = { _demats: {} };
+ this.costRows.filter(r => r.broker).forEach(r => costs[r.broker] = pick(r));
+ this.dematRows.filter(r => r.demat).forEach(r => costs._demats[r.demat] = pick(r));
+ this.costsStatus = 'saving…';
+ try {
+ const j = await fetch('/api/settings/broker_costs', { method:'POST', headers:{'Content-Type':'application/json'},
+ body: JSON.stringify({ costs }) }).then(r=>r.json());
+ this.costsStatus = j.saved ? '✓ saved — costs recomputed' : ('✗ ' + (j.error||'failed'));
+ await this.loadDay();
+ if (this.period!=='day') await this.fetchRange();
+ } catch(e) { this.costsStatus = '✗ ' + e; }
+ },
+ async settleExpired() {
+ if (!confirm('Book all expired-WORTHLESS open legs of today-expiring index at ₹0?\n(ITM legs stay open — enter their actual sq-off price manually)')) return;
+ try {
+ const j = await fetch('/api/reporting/settle_expired', { method:'POST' }).then(r=>r.json());
+ let m = j.settled ? ('✓ settled ' + j.settled + ' worthless legs at ₹0') : ('Nothing settled — ' + (j.note || (j.errors||[]).join('; ') || 'no open legs of expiring index'));
+ (j.itm_pending || []).forEach(p => { m += '\n' + p.strike + ' ' + p.side + ' ended ITM (intrinsic ₹' + p.intrinsic + ') — enter actual sq-off via Edit → Sq off'; });
+ alert(m);
+ await this.loadDay(); await this.loadDays();
+ } catch(e) { alert('✗ ' + e); }
+ },
+ openEdit(s) {
+ this.ed = { id: s.id, strategy_name: s.strategy_name, instrument: s.instrument,
+ tier: s.tier || '?', broker: s.broker || '', entry_time: s.entry_time,
+ slOn: !!(s.sl && s.sl.kind), tpOn: !!(s.tp && s.tp.kind),
+ sl: (s.sl && s.sl.kind) ? {kind:s.sl.kind, value:s.sl.value ?? null, note:s.sl.note || ''} : {kind:'premium', value:null, note:''},
+ tp: (s.tp && s.tp.kind) ? {kind:s.tp.kind, value:s.tp.value ?? null} : {kind:'premium', value:null},
+ booked: (s.booked_legs || []).map(b => ({...b,
+ _orig: { qty: b.qty, exit_price: b.exit_price, exit_time: b.exit_time } })),
+ legs: s.legs.map(l => ({ strike: l.strike, side: l.side, qty: l.qty, price: l.price, ltp: l.ltp, demat: l.demat || '',
+ sq: false, sq_qty: Math.abs(l.qty || 0), sq_price: l.ltp ?? 0, sq_time: '' })) };
+ this.edStatus = ''; this.showEdit = true;
+ },
+ removeLeg(i) {
+ const l = this.ed.legs[i];
+ if (l.strike && (l.qty || 0) !== 0 &&
+ !confirm('DELETE ' + l.strike + ' ' + l.side + ' as if it was NEVER TRADED?\n\nNo P&L will be booked. If you exited this leg in the market, press Cancel and use "Sq off…" instead — that books the profit/loss.')) return;
+ this.ed.legs.splice(i, 1);
+ },
+ sqPreview(l) {
+ if (!l.sq_qty || (!l.sq_price && l.sq_price !== 0)) return '';
+ const pnl = (l.qty || 0) < 0 ? (l.price - l.sq_price) * l.sq_qty : (l.sq_price - l.price) * l.sq_qty;
+ return this.fmtMoney(pnl);
+ },
+ async bookLeg(l) {
+ if (!l.sq_qty || l.sq_qty > Math.abs(l.qty || 0)) { this.edStatus = '✗ qty exceeds open ' + Math.abs(l.qty||0); return; }
+ this.edStatus = 'booking…';
+ try {
+ const r = await fetch('/api/reporting/close_leg', { method:'POST', headers:{'Content-Type':'application/json'},
+ body: JSON.stringify({ id: this.ed.id, strike: l.strike, side: l.side,
+ qty: l.sq_qty, price: l.sq_price, entry_price: l.price,
+ exit_time: l.sq_time || undefined }) });
+ const j = await r.json();
+ if (j.saved) {
+ const sign = (l.qty || 0) < 0 ? -1 : 1;
+ l.qty = sign * (Math.abs(l.qty) - l.sq_qty);
+ l.sq = false; this.edStatus = '✓ exit booked';
+ await this.loadDay();
+ } else this.edStatus = '✗ ' + (j.error || 'failed');
+ } catch(e) { this.edStatus = '✗ ' + e; }
+ },
+ async unbook(b, bi) {
+ const o = b._orig || b;
+ if (!confirm('Remove booking ' + b.strike + ' ' + b.side + ' × ' + o.qty + ' exit ₹' + o.exit_price + ' (' + this.fmtMoney(b.pnl) + ')?\nIts P&L will be reversed.')) return;
+ try {
+ const r = await fetch('/api/reporting/unbook', { method:'POST', headers:{'Content-Type':'application/json'},
+ body: JSON.stringify({ id: this.ed.id, strike: b.strike, side: b.side, qty: o.qty,
+ exit_price: o.exit_price, exit_time: o.exit_time }) });
+ const j = await r.json();
+ if (j.saved) { this.ed.booked.splice(bi, 1); this.edStatus = '✓ booking removed'; await this.loadDay(); }
+ else this.edStatus = '✗ ' + (j.error || 'failed');
+ } catch(e) { this.edStatus = '✗ ' + e; }
+ },
+ async saveBooking(b, bi) {
+ const o = b._orig || {};
+ this.edStatus = 'correcting…';
+ try {
+ const r = await fetch('/api/reporting/edit_booking', { method:'POST', headers:{'Content-Type':'application/json'},
+ body: JSON.stringify({ id: this.ed.id,
+ old: { strike: b.strike, side: b.side, qty: o.qty, exit_price: o.exit_price, exit_time: o.exit_time },
+ new: { qty: b.qty, entry_price: b.entry_price, exit_price: b.exit_price, exit_time: b.exit_time } }) });
+ const j = await r.json();
+ if (j.saved) {
+ b._orig = { qty: b.qty, exit_price: b.exit_price, exit_time: b.exit_time };
+ b.pnl = null; this.edStatus = '✓ corrected';
+ await this.loadDay();
+ const s = (this.day.strategies || []).find(x => x.id === this.ed.id);
+ const nb = (s?.booked_legs || []).find(x => x.strike === b.strike && x.side === b.side &&
+ x.qty === b.qty && x.exit_time === b.exit_time && Number(x.exit_price) === Number(b.exit_price));
+ if (nb) b.pnl = nb.pnl;
+ } else this.edStatus = '✗ ' + (j.error || 'failed');
+ } catch(e) { this.edStatus = '✗ ' + e; }
+ },
+ async saveEdit() {
+ // book any Sq off rows the user filled but didn't press "Book exit" on
+ for (const l of this.ed.legs) {
+ if (l.sq && l.sq_qty && (l.sq_price || l.sq_price === 0)) {
+ await this.bookLeg(l);
+ if (this.edStatus.startsWith('✗')) return; // booking failed — stop, don't amend
+ }
+ }
+ const legs = this.ed.legs.filter(l => l.strike).map(l => {
+ const o = { strike: l.strike, side: l.side, qty: l.qty || 0, price: l.price || 0, demat: l.demat || '' };
+ if (l.ltp !== null && l.ltp !== undefined && l.ltp !== '') o.ltp = Number(l.ltp); // manual LTP override
+ return o;
+ });
+ this.edStatus = 'saving…';
+ try {
+ const r = await fetch('/api/reporting/amend', { method:'POST', headers:{'Content-Type':'application/json'},
+ body: JSON.stringify({ id: this.ed.id, legs,
+ meta: { strategy_name: this.ed.strategy_name, tier: this.ed.tier,
+ broker: this.ed.broker, entry_time: this.ed.entry_time,
+ sl: this.ed.slOn ? this.ed.sl : {}, tp: this.ed.tpOn ? this.ed.tp : {} } }) });
+ const j = await r.json();
+ if (j.saved) { this.showEdit = false; await this.loadDay(); await this.loadDays(); }
+ else this.edStatus = '✗ ' + (j.error || 'failed');
+ } catch(e) { this.edStatus = '✗ ' + e; }
+ },
+
+ async delStrategy(s) {
+ if (!confirm('Delete "' + (s.strategy_name || s.instrument) + '"?')) return;
+ await fetch('/api/reporting/strategy/' + s.id, { method: 'DELETE' });
+ await this.loadDay(); await this.loadDays();
+ },
+
+ shotQueue: [], shotStatus: '', shotDragging: false, shotMerge: true,
+ async shotFiles(fileList) {
+ // OCR each screenshot AND save it to the journal automatically — no manual steps.
+ // When shotMerge is on, screenshots sharing a strategy name append into one
+ // strategy (a big position split across several images).
+ const files = Array.from(fileList || []).filter(f => f.type.startsWith('image/'));
+ if (!files.length) return;
+ this.shotStatus = `Reading ${files.length} screenshot${files.length>1?'s':''}…`;
+ let saved = 0, merged = 0;
+ const keyOf = (sp) => (sp.portfolio_name || (sp.instrument+' '+(sp.tier||'')+' '+(sp.broker||''))).trim().toLowerCase();
+ for (const f of files) {
+ this.shotQueue.unshift({ id: (this._shotSeq = (this._shotSeq || 0) + 1), filename: f.name, parsed: null, status: 'reading…', error: '' });
+ const item = this.shotQueue[0];   // the REACTIVE proxy — mutate this so status repaints
+ const fd = new FormData(); fd.append('file', f);
+ try {
+ const j = await fetch('/api/journal/screenshot', { method:'POST', body: fd }).then(r=>r.json());
+ const sp = j.parsed;
+ if (!sp || !(sp.positions||[]).length) { item.status = 'error'; item.error = j.error || 'no positions found'; continue; }
+ item.parsed = sp;
+ item.status = 'saving…';
+ // Split OPEN legs (still live) from CLOSED/booked legs (Sensibull greys them; qty 0
+ // + a Booked P&L). Closed legs must NOT be saved as open legs — that dropped the
+ // booked P&L on every upload. Book them separately so Total/Booked/Max-profit are right.
+ const openLegs = sp.positions.filter(l => !l.status && Number(l.qty) !== 0)
+ .map(l => ({strike:l.strike, side:l.side, qty:l.qty, price:l.price}));
+ const closedLegs = sp.positions.filter(l => l.status === 'closed' || (Number(l.qty) === 0 && l.booked_pnl != null));
+ // surface OCR uncertainty (avg vs ltp) so a wrong premium isn't saved silently
+ const warns = (sp.warnings || []).concat(sp.positions.filter(l=>l.needs_review).map(l=>`${l.strike}${l.side}: verify Avg`));
+ // book a closed leg's exact P&L; screenshot has no closed-leg qty, so record it as a
+ // lump (qty from the basket scale, entry back-solved) — P&L is exact, qty approximate.
+ const bookClosed = async (id) => { for (const c of closedLegs) {
+ if (c.booked_pnl == null) continue;
+ const q = Math.abs(openLegs[0]?.qty) || 1;      // proxy qty from an open leg
+ const exit = (c.ltp != null ? Number(c.ltp) : 0);
+ await fetch('/api/reporting/close_leg', { method:'POST', headers:{'Content-Type':'application/json'},
+ body: JSON.stringify({ id, strike:c.strike, side:c.side, qty:q, price:exit, entry_price: exit + Number(c.booked_pnl)/q }) });
+ } };
+ // existing same-name strategy today?
+ const match = this.shotMerge
+ ? (this.day.strategies||[]).find(x => (x.strategy_name||'').trim().toLowerCase() === keyOf(sp))
+ : null;
+ let s;
+ if (match) {
+ // union legs by strike+side; keep existing leg on overlap (preserves bookings/qty)
+ const byKey = {};
+ (match.legs||[]).forEach(l => byKey[l.strike+l.side] = {strike:l.strike, side:l.side, qty:l.qty, price:l.price});
+ openLegs.forEach(l => { if (!byKey[l.strike+l.side]) byKey[l.strike+l.side] = l; });
+ s = await fetch('/api/reporting/amend', { method:'POST', headers:{'Content-Type':'application/json'},
+ body: JSON.stringify({ id: match.id, legs: Object.values(byKey) }) }).then(r=>r.json());
+ if (s.saved) { await bookClosed(match.id); item.status = 'merged'; merged++; }
+ } else {
+ s = await fetch('/api/journal/trade', { method:'POST', headers:{'Content-Type':'application/json'},
+ body: JSON.stringify({ instrument: sp.instrument, tier: sp.tier || '?', broker: sp.broker || '',
+ strategy_name: sp.portfolio_name || '', entry_time: '', entry_date: this.selDate,
+ source: 'screenshot', legs: openLegs }) }).then(r=>r.json());
+ const newId = s.trade?.id || s.id;
+ if (s.saved && newId) { await bookClosed(newId); item.status = 'saved'; saved++; }
+ else if (s.saved) { item.status = 'saved'; saved++; }
+ }
+ if (warns.length) item.error = '⚠ verify: ' + warns.join(', ');
+ if (!s.saved) { item.status = 'error'; item.error = s.error || 'save failed'; }
+ else { await this.loadDay(); } // refresh so the next image can merge into this one
+ } catch(e) { item.status = 'error'; item.error = String(e); }
+ }
+ await this.loadDays();
+ const failed = this.shotQueue.filter(i=>i.status==='error').length;
+ this.shotStatus = `✓ ${saved} saved` + (merged?` · ${merged} merged`:'') + (failed ? ` · ${failed} failed` : '');
+ },
+ csvFile(ev) {
+ const f = ev.target.files[0]; if (!f) return;
+ const rd = new FileReader(); rd.onload = () => { this.csvText = rd.result; }; rd.readAsText(f);
+ },
+ async csvSave() {
+ this.ingestStatus = 'ingesting…';
+ try {
+ const r = await fetch('/api/journal/csv', { method:'POST', headers:{'Content-Type':'application/json'},
+ body: JSON.stringify({ csv_text: this.csvText, default_date: this.selDate }) });
+ const j = await r.json();
+ this.ingestStatus = j.saved != null ? ('✓ ' + j.saved + ' strategies') : ('✗ ' + (j.error||'failed'));
+ if (j.saved) { this.csvText=''; await this.loadDay(); await this.loadDays(); }
+ } catch(e) { this.ingestStatus = '✗ ' + e; }
+ },
+ };
+}
+</script>
+{% endblock %}

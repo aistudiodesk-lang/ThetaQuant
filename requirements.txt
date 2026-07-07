@@ -1,0 +1,23 @@
+# ThetaDesk — Python 3.11 ONLY (deps don't all build on 3.14 yet)
+# Data / backtest
+pandas>=2.2
+pyarrow>=15.0
+duckdb>=0.10
+numpy>=1.26
+scipy>=1.11
+matplotlib>=3.8
+openpyxl>=3.1
+
+# Web app (FastAPI + Jinja; Tailwind/Alpine via CDN)
+fastapi>=0.110
+uvicorn[standard]>=0.29
+jinja2>=3.1
+python-multipart>=0.0.9
+pytz>=2024.1
+
+# Broker / market data
+kiteconnect>=4.2
+
+# Screenshot OCR (macOS Vision framework) — macOS only
+pyobjc-framework-Vision>=10.0; sys_platform == "darwin"
+pyobjc-framework-Quartz>=10.0; sys_platform == "darwin"

@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %}Research · Theta Quant{% endblock %}
+{% block content %}
+<div class="space-y-4" x-data="research()" x-init="load(); loadNews()">
+
+  <div class="flex items-end justify-between gap-3 flex-wrap">
+    <div>
+      <h1 class="text-[21px] font-bold tracking-tight">Research</h1>
+      <div class="text-[12px] text-[var(--text-3)]">Consensus screener over your universe — <b>our</b> RSI/MACD/trend signals, not a scrape. One click opens each paid site pre-loaded to the stock. <span x-show="d.computed_at" class="num">· <span x-text="d.computed_at"></span></span></div>
+    </div>
+    <div class="flex items-center gap-2">
+      <input x-model="newSym" @keydown.enter="addWatch()" placeholder="add symbol…" class="num text-[12px] border border-[var(--border)] rounded-lg px-2.5 py-1.5 w-32 uppercase">
+      <button @click="addWatch()" class="text-[12px] font-semibold px-2.5 py-1.5 rounded-md border border-[var(--border)]">+ Watch</button>
+      <button @click="load()" class="text-[11px] px-2 py-1.5 rounded-md border border-[var(--border)]">↻</button>
+    </div>
+  </div>
+
+  <!-- TOP NEWS — surfaced so you don't click into each item -->
+  <div class="card p-0 overflow-hidden">
+    <div class="px-3 py-2 border-b border-[var(--border)] flex items-center justify-between" style="background:var(--blue-tint)">
+      <span class="text-[12px] font-bold">📰 Market news <span class="text-[var(--text-3)] font-normal">· live, no Kite needed</span></span>
+      <span class="text-[10px] text-[var(--text-3)]" x-show="(news.events||[]).length"><template x-for="(e,i) in news.events.slice(0,3)" :key="i"><span class="pill text-[9px] bg-warn-100 text-warn-700 ml-1" x-text="(e.date||'')+' '+(e.label||e.event||'')"></span></template></span>
+    </div>
+    <div class="divide-y divide-[var(--border)] max-h-[230px] overflow-y-auto">
+      <template x-for="(h,i) in (news.items||news.headlines||[])" :key="i">
+        <a :href="h.url||'#'" :target="h.url?'_blank':''" class="flex items-start gap-2 px-3 py-2 hover:bg-[var(--bg)]">
+          <span class="text-[10px] text-[var(--text-3)] num shrink-0 mt-0.5 w-16 truncate" x-text="agoShort(h.at)"></span>
+          <span class="text-[12px] flex-1 leading-snug" x-text="(h.title||'').replace(/ - [^-]+$/,'')"></span>
+          <span class="text-[9px] text-[var(--text-3)] shrink-0 mt-0.5" x-text="h.source||''"></span>
+        </a>
+      </template>
+      <div x-show="!(news.items||news.headlines||[]).length" class="px-3 py-6 text-center text-[11px] text-[var(--text-3)]">Loading market news…</div>
+    </div>
+  </div>
+
+  <!-- use-case filter -->
+  <div class="card p-2.5 flex flex-wrap items-center gap-2 text-[12px]">
+    <input x-model="q" placeholder="search…" class="num border border-[var(--border)] rounded-lg px-2.5 py-1.5 text-[12px] w-32">
+    <span class="w-px h-5 bg-[var(--border)]"></span>
+    <template x-for="f in [['all','All'],['sell_calls','✅ Sell calls'],['momentum','🚀 Momentum (S2)'],['avoid','⛔ Avoid'],['neutral','Neutral']]" :key="f[0]">
+      <button @click="uc=f[0]" class="px-2.5 py-1 rounded-md text-[11px] font-semibold border" :class="uc===f[0]?'bg-[var(--text-1)] text-[var(--surface)] border-[var(--text-1)]':'border-[var(--border)] text-[var(--text-3)]'" x-text="f[1]"></button>
+    </template>
+    <span class="ml-auto text-[11px] text-[var(--text-3)]" x-text="rows().length+' / '+(d.rows||[]).length"></span>
+  </div>
+
+  <div class="card p-0 overflow-hidden">
+    <div class="overflow-x-auto"><table class="data-table">
+      <thead><tr>
+        <th>Stock</th><th class="text-right">Spot</th><th>Use for</th><th>CC verdict</th>
+        <th>Trend</th><th class="text-right">RSI d/w</th><th>MACD</th><th class="text-right">Mom</th><th class="text-right">% off high</th><th>Open in ↗</th>
+      </tr></thead>
+      <tbody>
+        <template x-for="r in rows()" :key="r.symbol">
+          <tr>
+            <td><button class="font-bold text-[var(--blue)] hover:underline" @click="openStock(r)" x-text="r.symbol"></button>
+              <button @click="removeWatch(r.symbol)" x-show="isWatch(r.symbol)" class="text-[10px] text-[var(--text-3)] ml-1" title="remove from watchlist">✕</button></td>
+            <td class="num text-right" x-text="r.spot?('₹'+Math.round(r.spot).toLocaleString('en-IN')):'—'"></td>
+            <td><span class="pill text-[9px] font-bold" :class="ucClass(r.use_case)" x-text="ucLabel(r.use_case)"></span></td>
+            <td><span class="pill text-[9px]" :class="vClass(r.verdict)" x-text="r.verdict"></span></td>
+            <td class="text-[11px]" :class="(r.trend||'').includes('bull')?'text-loss-600':(r.trend||'').includes('bear')?'text-gain-600':'text-[var(--text-3)]'" x-text="r.trend||'—'"></td>
+            <td class="num text-right" x-text="r.rsi_d?(Math.round(r.rsi_d)+'/'+Math.round(r.rsi_w||0)):'—'"></td>
+            <td class="text-[10px] text-[var(--text-3)]" x-text="(r.macd_d||'').replace(/_/g,' ')||'—'"></td>
+            <td class="num text-right text-[11px]"><span class="text-gain-600" x-text="r.bear||0"></span>/<span class="text-loss-600" x-text="r.bull||0"></span></td>
+            <td class="num text-right" :class="(r.pct_off_high??0)>-0.03?'text-loss-600':''" x-text="r.pct_off_high!=null?(Math.round(r.pct_off_high*1000)/10+'%'):'—'"></td>
+            <td><div class="flex gap-1">
+              <template x-for="l in (r.launchers||[]).slice(0,4)" :key="l.key">
+                <a :href="l.url" target="_blank" class="text-[9px] px-1.5 py-0.5 rounded border border-[var(--border)] hover:bg-[var(--bg)] text-[var(--text-3)]" :title="l.label" x-text="l.label.slice(0,2)"></a>
+              </template>
+              <button @click="openStock(r)" class="text-[9px] px-1.5 py-0.5 rounded border border-[var(--border)] text-[var(--text-3)]">…</button>
+            </div></td>
+          </tr>
+        </template>
+      </tbody>
+    </table></div>
+    <div x-show="!(d.rows||[]).length" class="p-8 text-center text-[var(--text-3)] text-[12px]">Scanning your universe… (needs Kite login for candles)</div>
+  </div>
+
+  <div class="text-[10px] text-[var(--text-3)]">Use-for tag from our signals: <b>Sell calls</b> = range/bearish (safe S1/S2A) · <b>Momentum</b> = strong-up buy-write (S2) · <b>Avoid</b> = near 52w-high or breaking out (bad to sell calls). Verdict = full RSI/MACD/breakout eligibility. Paid-site links open your logged-in view — we don't scrape them.</div>
+
+
+  <!-- stock drawer -->
+  <div x-show="sel" x-cloak class="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-3" @click.self="sel=null">
+    <div class="bg-[var(--surface)] rounded-2xl p-5 w-[95vw] max-w-[560px] max-h-[88vh] overflow-y-auto shadow-2xl" x-show="sel">
+      <div class="flex items-start justify-between mb-3">
+        <div><div class="text-[17px] font-bold" x-text="sel?.symbol"></div>
+          <div class="text-[11px] num text-[var(--text-3)]" x-show="sel?.spot">spot ₹<span x-text="sel&&Math.round(sel.spot).toLocaleString('en-IN')"></span> · <span x-text="sel?.trend"></span></div></div>
+        <button @click="sel=null" class="text-[var(--text-3)] text-[18px] leading-none">&times;</button>
+      </div>
+      <div class="grid grid-cols-2 gap-2 mb-3 text-[12px] num">
+        <div class="rounded-lg bg-[var(--bg)] p-2.5"><div class="text-[9px] uppercase text-[var(--text-3)]">CC verdict</div><span class="pill text-[10px] mt-0.5 inline-block" :class="vClass(sel?.verdict)" x-text="sel?.verdict"></span></div>
+        <div class="rounded-lg bg-[var(--bg)] p-2.5"><div class="text-[9px] uppercase text-[var(--text-3)]">Use for</div><span class="pill text-[10px] mt-0.5 inline-block" :class="ucClass(sel?.use_case)" x-text="ucLabel(sel?.use_case)"></span></div>
+        <div class="rounded-lg bg-[var(--bg)] p-2.5"><div class="text-[9px] uppercase text-[var(--text-3)]">RSI d/w</div><b x-text="sel&&sel.rsi_d?(Math.round(sel.rsi_d)+' / '+Math.round(sel.rsi_w||0)):'—'"></b></div>
+        <div class="rounded-lg bg-[var(--bg)] p-2.5"><div class="text-[9px] uppercase text-[var(--text-3)]">% off 52w high</div><b x-text="sel&&sel.pct_off_high!=null?(Math.round(sel.pct_off_high*1000)/10+'%'):'—'"></b></div>
+      </div>
+      <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold mb-1.5">Open this stock in (you're logged in)</div>
+      <div class="flex flex-wrap gap-1.5">
+        <template x-for="l in (sel?.launchers||[])" :key="l.key">
+          <a :href="l.url" target="_blank" class="text-[12px] font-semibold px-3 py-1.5 rounded-lg border border-[var(--blue-border,var(--border))] text-[var(--blue)] hover:bg-[var(--bg)]" x-text="l.label+' ↗'"></a>
+        </template>
+      </div>
+      <!-- per-stock news (free, no Kite) -->
+      <div class="text-[10px] uppercase text-[var(--text-3)] font-semibold mt-4 mb-1.5">Latest news on <span x-text="sel?.symbol"></span></div>
+      <div class="space-y-1.5">
+        <template x-for="(h,i) in selNews" :key="i">
+          <a :href="h.url||'#'" target="_blank" class="block hover:text-[var(--blue)]">
+            <div class="text-[12px] leading-snug" x-text="(h.title||'').replace(/ - [^-]+$/,'')"></div>
+            <div class="text-[9px] text-[var(--text-3)] num"><span x-text="h.source||''"></span> · <span x-text="agoShort(h.at)"></span></div>
+          </a>
+        </template>
+        <div x-show="!selNews.length" class="text-[11px] text-[var(--text-3)]">Fetching news…</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function research(){
+  const UC={sell_calls:['✅ Sell calls','bg-gain-100 text-gain-700'],momentum:['🚀 Momentum','bg-accent-50 text-accent-700'],avoid:['⛔ Avoid','bg-loss-100 text-loss-700'],neutral:['Neutral','bg-[var(--bg)] text-[var(--text-3)]'],unknown:['—','bg-[var(--bg)] text-[var(--text-3)]']};
+  const V={GREEN:'bg-gain-100 text-gain-700',YELLOW:'bg-warn-100 text-warn-700',RED:'bg-loss-100 text-loss-700',REJECT:'bg-loss-200 text-loss-800',UNKNOWN:'bg-[var(--bg)] text-[var(--text-3)]'};
+  return {
+    d:{rows:[]}, news:{events:[],items:[]}, wl:[], q:'', uc:'all', newSym:'', sel:null, selNews:[],
+    async load(){ try{ this.d=await fetch('/api/research/screen').then(r=>r.json()); const w=await fetch('/api/research/watchlist').then(r=>r.json()); this.wl=w.watchlist||[]; }catch(e){} },
+    async loadNews(){ try{ const j=await fetch('/api/research/news').then(r=>r.json()); this.news={items:j.items||[], events:(j.brief||{}).events||[]}; }catch(e){} },
+    agoShort(at){ if(!at) return ''; const t=new Date(at); if(isNaN(t)) return ''; const m=Math.floor((Date.now()-t)/60000); if(m<60) return (m<1?'now':m+'m'); const h=Math.floor(m/60); if(h<24) return h+'h'; return Math.floor(h/24)+'d'; },
+    rows(){ const q=this.q.toLowerCase().trim();
+      return (this.d.rows||[]).filter(r=>(this.uc==='all'||r.use_case===this.uc) && (!q||r.symbol.toLowerCase().includes(q))); },
+    ucLabel(u){ return (UC[u]||UC.unknown)[0]; }, ucClass(u){ return (UC[u]||UC.unknown)[1]; },
+    vClass(v){ return V[v]||V.UNKNOWN; },
+    isWatch(s){ return this.wl.includes(s); },
+    openStock(r){ this.sel=r; this.selNews=[]; fetch('/api/research/news?symbol='+encodeURIComponent(r.symbol)).then(x=>x.json()).then(j=>{ this.selNews=j.items||[]; }).catch(()=>{}); },
+    async addWatch(){ const s=(this.newSym||'').toUpperCase().trim(); if(!s)return; this.newSym=''; try{ const j=await fetch('/api/research/watchlist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({symbol:s})}).then(r=>r.json()); this.wl=j.watchlist||[]; await this.load(); }catch(e){} },
+    async removeWatch(s){ try{ const j=await fetch('/api/research/watchlist/'+encodeURIComponent(s),{method:'DELETE'}).then(r=>r.json()); this.wl=j.watchlist||[]; await this.load(); }catch(e){} },
+  };
+}
+</script>
+{% endblock %}

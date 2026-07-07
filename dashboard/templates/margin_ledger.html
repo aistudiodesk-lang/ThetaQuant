@@ -1,0 +1,209 @@
+{% extends "base.html" %}
+{% block title %}Margin & Ledger · Theta Quant{% endblock %}
+{% block content %}
+<div class="space-y-5" x-data="marginLedger()" x-init="load(); setInterval(()=>load(),60000)">
+ <div class="flex items-end justify-between flex-wrap gap-2">
+ <div>
+ <h1 class="text-xl font-bold tracking-tight">Margin &amp; Demats</h1>
+ <div class="text-[12px] text-[var(--text-3)]">Margin &amp; collateral — sliced by demat, strategy, underlying, broker or F&amp;O. Catch <b>shortfall</b>, surface <b>excess</b>. <span x-show="asOf" class="num">as of <b x-text="asOf"></b></span> <span x-text="d.computed_at?('· '+d.computed_at):''"></span></div>
+ </div>
+ <div class="flex items-center gap-2">
+ <!-- source toggle (mirrors Full Reporting): sheet/deployed vs actual broker / contract note -->
+ <div class="inline-flex rounded-lg border border-[var(--border)] overflow-hidden text-[11px]">
+  <button @click="src='manual'" class="px-2.5 py-1.5" :class="src==='manual'?'bg-[var(--text-1)] text-[var(--surface)]':'text-[var(--text-3)]'" title="Deployed margin from the strategy / M-sheets">Manual / Sheet</button>
+  <button @click="src='cn'" class="px-2.5 py-1.5" :class="src==='cn'?'bg-[var(--text-1)] text-[var(--surface)]':'text-[var(--text-3)]'" title="Actual broker margin from contract notes (ingest pending)">Contract note / Actual</button>
+ </div>
+ <button @click="load()" class="text-[11px] px-2 py-1.5 rounded-md border border-[var(--border)]">↻</button>
+ </div>
+ </div>
+
+ <div x-show="src==='cn'" class="card p-3 text-[11px] border-l-4" style="border-left-color:var(--gold,#B8860B)">
+  <b>Actual / contract-note margin</b> reconciliation lands once broker contract-note margin is ingested (recon Layer&nbsp;B). The <b>demat &amp; F&amp;O</b> tiles below already reflect <b>actual</b> broker margin from your M-sheets; strategy/underlying breakdowns are <b>deployed</b> (sheet) figures until then.
+ </div>
+
+ <!-- filters: search · broker · demat · as-of -->
+ <div class="card p-2.5 flex flex-wrap items-center gap-2 text-[12px]">
+ <input x-model="q" placeholder="search…" class="num border border-[var(--border)] rounded-lg px-2.5 py-1.5 w-36">
+ <span class="w-px h-5 bg-[var(--border)]"></span>
+ <select x-model="fBroker" @change="load()" class="border border-[var(--border)] rounded-lg px-2 py-1.5 text-[12px]" x-show="(d.brokers||[]).length">
+ <option value="">All brokers</option><template x-for="b in d.brokers||[]" :key="b"><option x-text="b"></option></template></select>
+ <select x-model="fDemat" @change="load()" class="border border-[var(--border)] rounded-lg px-2 py-1.5 text-[12px]">
+ <option value="">All demats</option><template x-for="e in allDemats" :key="e"><option x-text="e"></option></template></select>
+ <span class="w-px h-5 bg-[var(--border)]"></span>
+ <span class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">As of</span>
+ <select x-model="asOf" @change="load()" class="border border-[var(--border)] rounded-lg px-2 py-1.5 text-[12px] num">
+ <option value="">Latest</option><template x-for="dt in d.dates||[]" :key="dt"><option :value="dt" x-text="dt"></option></template></select>
+ <span x-show="asOf" class="text-[10px] text-warn-600">past date</span>
+ </div>
+
+ <!-- dashboard: actual broker capital (M-sheets) -->
+ <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+ <div class="card p-3.5"><div class="text-[9px] uppercase text-[var(--text-3)] font-semibold">Margin used</div>
+ <div class="num text-[19px] font-bold" x-text="cr(t().margin_used)"></div>
+ <div class="text-[9px] text-[var(--text-3)] num">fut <span x-text="cr(t().margin_fut)"></span> · opt <span x-text="cr(t().margin_opt)"></span></div></div>
+ <div class="card p-3.5"><div class="text-[9px] uppercase text-[var(--text-3)] font-semibold">Available</div>
+ <div class="num text-[19px] font-bold text-gain-600" x-text="cr(t().available)"></div>
+ <div class="text-[9px] text-[var(--text-3)]" x-text="t().util_pct!=null?('util '+t().util_pct+'%'):''"></div></div>
+ <div class="card p-3.5"><div class="text-[9px] uppercase text-[var(--text-3)] font-semibold">Margin from pledge</div>
+ <div class="num text-[19px] font-bold" x-text="cr(t().pledge)"></div>
+ <div class="text-[9px] text-[var(--text-3)]">stock collateral</div></div>
+ <div class="card p-3.5"><div class="text-[9px] uppercase text-[var(--text-3)] font-semibold">GSEC + FD</div>
+ <div class="num text-[19px] font-bold" x-text="cr((t().gsec||0)+(t().fd||0))"></div>
+ <div class="text-[9px] text-[var(--text-3)] num">gsec <span x-text="cr(t().gsec)"></span> · fd <span x-text="cr(t().fd)"></span></div></div>
+ <div class="card p-3.5"><div class="text-[9px] uppercase text-[var(--text-3)] font-semibold">Ledger (cash)</div>
+ <div class="num text-[19px] font-bold" x-text="cr(t().ledger)"></div>
+ <div class="text-[9px] text-[var(--text-3)] num" x-show="t().cash_blocked">blocked <span x-text="cr(t().cash_blocked)"></span></div></div>
+ <div class="card p-3.5" :class="(t().headroom??0)<0?'ring-2 ring-loss-400':''"><div class="text-[9px] uppercase text-[var(--text-3)] font-semibold" x-text="(t().headroom??0)<0?'Shortfall':'Excess / headroom'"></div>
+ <div class="num text-[19px] font-bold" :class="(t().headroom??0)<0?'text-loss-600':'text-gain-600'" x-text="money(t().headroom)"></div>
+ <div class="text-[9px] text-[var(--text-3)]" x-text="(t().headroom??0)<0?'add funds':'deploy / withdraw'"></div></div>
+ </div>
+
+ <!-- deployed-margin split (from strategy sheets): expiry tracked SEPARATELY -->
+ <div class="card p-2.5 flex flex-wrap items-center gap-x-5 gap-y-1 text-[12px]">
+  <span class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">Deployed margin (sheet)</span>
+  <span>Total <b class="num" x-text="cr(dep().total)"></b></span>
+  <span>ex-Expiry <b class="num text-gain-700" x-text="cr(dep().exexp)"></b></span>
+  <span style="color:var(--gold,#B8860B)">Expiry <b class="num" x-text="cr(dep().exp)"></b> <span class="text-[10px] opacity-70">· separate margin pool</span></span>
+ </div>
+
+ <!-- VIEW BY: choose the slice -->
+ <div class="flex items-center gap-1.5 flex-wrap text-[11px]">
+  <span class="text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold mr-1">View by</span>
+  <template x-for="v in views" :key="v.k">
+   <button @click="viewBy=v.k" class="px-2.5 py-1 rounded-md border" :class="viewBy===v.k?'bg-[var(--blue)] text-white border-[var(--blue)]':'border-[var(--border)] text-[var(--text-3)]'" x-text="v.label"></button>
+  </template>
+  <span class="text-[10px] text-[var(--text-3)] ml-1" x-text="viewSrcNote()"></span>
+ </div>
+
+ <!-- DEMAT view (actual broker margin, per-entity cards) -->
+ <div x-show="viewBy==='demat'" class="grid grid-cols-1 md:grid-cols-2 gap-3">
+ <template x-for="e in eFilter()" :key="e.entity">
+ <div class="card p-4" :class="e.status==='shortfall'?'border-loss-300':e.status==='excess'?'border-gain-300':''">
+ <div class="flex items-center justify-between">
+ <div class="font-bold text-[14px]" x-text="e.entity"></div>
+ <div class="flex items-center gap-1.5">
+ <span class="text-[9px] text-[var(--text-3)]" x-show="e.broker" x-text="e.broker"></span>
+ <span class="pill text-[10px]" :class="e.status==='shortfall'?'bg-loss-100 text-loss-700':e.status==='excess'?'bg-gain-100 text-gain-700':'bg-[var(--bg)] text-[var(--text-3)]'"
+ x-text="e.status==='shortfall'?' SHORTFALL':e.status==='excess'?'EXCESS':'OK'"></span>
+ </div>
+ </div>
+ <div class="grid grid-cols-3 gap-2 mt-2 num text-[12px]">
+ <div><div class="text-[9px] uppercase text-[var(--text-3)]">Margin</div><b x-text="cr(e.margin_used)"></b><div class="text-[9px] text-[var(--text-3)]" x-text="e.util_pct!=null?(e.util_pct+'% util'):''"></div></div>
+ <div><div class="text-[9px] uppercase text-[var(--text-3)]">Available</div><b x-text="cr(e.available)"></b></div>
+ <div><div class="text-[9px] uppercase text-[var(--text-3)]" x-text="e.headroom<0?'Shortfall':'Headroom'"></div><b :class="e.headroom<0?'text-loss-600':'text-gain-600'" x-text="money(e.headroom)"></b></div>
+ </div>
+ <div class="text-[10px] text-[var(--text-3)] num mt-1">fut <span x-text="cr(e.margin_fut)"></span> · opt <span x-text="cr(e.margin_opt)"></span> · pledge <span x-text="cr(e.pledge)"></span><span x-show="e.gsec"> · gsec <span x-text="cr(e.gsec)"></span></span><span x-show="e.fd"> · fd <span x-text="cr(e.fd)"></span></span> · ledger <span x-text="cr(e.ledger)"></span> · as of <span x-text="e.as_of"></span></div>
+ <div class="mt-2 overflow-x-auto"><table class="data-table">
+ <thead><tr><th>Date</th><th class="text-right">Margin</th><th class="text-right">Avail</th><th class="text-right">Headroom</th></tr></thead>
+ <tbody><template x-for="(r,i) in e.series" :key="i"><tr :class="r.is_expiry?'bg-warn-50':''">
+ <td class="num text-[11px]"><span x-text="r.date"></span><span x-show="r.is_expiry" class="text-[9px] text-warn-600"> ·exp</span></td>
+ <td class="num text-right" x-text="cr(r.margin)"></td>
+ <td class="num text-right" x-text="cr(r.available)"></td>
+ <td class="num text-right" :class="(r.headroom??0)<0?'text-loss-600':'text-gain-600'" x-text="r.headroom!=null?money(r.headroom):'—'"></td>
+ </tr></template></tbody></table></div>
+ </div>
+ </template>
+ <div x-show="!(d.entities||[]).length" class="card p-8 text-center text-[var(--text-3)] text-[12px]">No M-sheet data parsed.</div>
+ </div>
+
+ <!-- STRATEGY / UNDERLYING / BROKER breakdown table (deployed margin from sheets) -->
+ <div x-show="viewBy==='strategy'||viewBy==='underlying'||viewBy==='broker'" class="card p-0 overflow-x-auto">
+ <table class="data-table">
+ <thead><tr><th x-text="colLabel()"></th><th class="text-right">Margin</th><th class="text-right">Premium</th><th class="text-right">Yield</th><th class="text-right">P&L</th><th class="text-right"># entries</th></tr></thead>
+ <tbody>
+ <template x-for="g in breakdown()" :key="g.key">
+ <tr>
+ <td><span x-text="g.label"></span><span x-show="g.expiry" class="ml-1.5 text-[9px] font-bold px-1 py-px rounded" style="color:#B8860B;background:#FBF1D9" title="Expiry-day margin is mechanically different — separate pool">SEPARATE</span></td>
+ <td class="num text-right font-semibold" x-text="cr(g.margin)"></td>
+ <td class="num text-right text-gain-600" x-text="g.premium?money(g.premium):'—'"></td>
+ <td class="num text-right" x-text="g.yield!=null?(g.yield+'%'):'—'"></td>
+ <td class="num text-right font-semibold" :class="g.pnl>=0?'text-gain-600':'text-loss-600'" x-text="g.pnl?money(g.pnl):'—'"></td>
+ <td class="num text-right text-[var(--text-3)]" x-text="g.n"></td>
+ </tr>
+ </template>
+ </tbody>
+ <tfoot><tr class="total">
+ <td>Total</td>
+ <td class="num text-right" x-text="cr(breakdown().reduce((a,g)=>a+(g.margin||0),0))"></td>
+ <td class="num text-right text-gain-600" x-text="money(breakdown().reduce((a,g)=>a+(g.premium||0),0))"></td>
+ <td></td>
+ <td class="num text-right" :class="breakdown().reduce((a,g)=>a+(g.pnl||0),0)>=0?'text-gain-600':'text-loss-600'" x-text="money(breakdown().reduce((a,g)=>a+(g.pnl||0),0))"></td>
+ <td class="num text-right text-[var(--text-3)]" x-text="breakdown().reduce((a,g)=>a+(g.n||0),0)"></td>
+ </tr></tfoot>
+ </table>
+ <div x-show="!breakdown().length" class="p-8 text-center text-[var(--text-3)] text-[12px]">No entries match the filter.</div>
+ </div>
+
+ <!-- F&O view (actual broker margin: options vs futures, from M-sheets) -->
+ <div x-show="viewBy==='fo'" class="space-y-3">
+  <div class="grid grid-cols-2 gap-3">
+   <div class="card p-4"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Options margin</div>
+    <div class="num text-[22px] font-bold" x-text="cr(t().margin_opt)"></div>
+    <div class="text-[10px] text-[var(--text-3)]" x-text="foPct('opt')+'% of margin used'"></div></div>
+   <div class="card p-4"><div class="text-[10px] uppercase text-[var(--text-3)] font-semibold">Futures margin</div>
+    <div class="num text-[22px] font-bold" x-text="cr(t().margin_fut)"></div>
+    <div class="text-[10px] text-[var(--text-3)]" x-text="foPct('fut')+'% of margin used'"></div></div>
+  </div>
+  <div class="card p-0 overflow-x-auto"><table class="data-table">
+   <thead><tr><th>Demat</th><th>Broker</th><th class="text-right">Options</th><th class="text-right">Futures</th><th class="text-right">Total</th></tr></thead>
+   <tbody><template x-for="e in eFilter()" :key="e.entity">
+    <tr><td x-text="e.entity"></td><td class="text-[var(--text-3)]" x-text="e.broker"></td>
+     <td class="num text-right" x-text="cr(e.margin_opt)"></td>
+     <td class="num text-right" x-text="cr(e.margin_fut)"></td>
+     <td class="num text-right font-semibold" x-text="cr(e.margin_used)"></td></tr>
+   </template></tbody>
+   <tfoot><tr class="total"><td>Total</td><td></td>
+    <td class="num text-right" x-text="cr(t().margin_opt)"></td>
+    <td class="num text-right" x-text="cr(t().margin_fut)"></td>
+    <td class="num text-right" x-text="cr(t().margin_used)"></td></tr></tfoot>
+  </table></div>
+ </div>
+
+ <div class="text-[10px] text-[var(--text-3)]">Demat/F&amp;O figures are <b>actual</b> broker margin (M-sheets); strategy/underlying are <b>deployed</b> margin from the strategy sheets. Expiry desk (S4) is flagged as a separate margin pool throughout.</div>
+</div>
+<script>
+function marginLedger(){
+ return {
+ d:{entities:[],totals:{},dates:[],brokers:[]}, rep:{strategies:[]}, repLoaded:false,
+ q:'', fBroker:'', fDemat:'', asOf:'', allDemats:[], src:'manual', viewBy:'demat',
+ views:[{k:'demat',label:'Demat'},{k:'strategy',label:'Strategy'},{k:'underlying',label:'Underlying'},{k:'broker',label:'Broker'},{k:'fo',label:'F&O'}],
+ async load(){ const p=new URLSearchParams(); if(this.fBroker)p.set('broker',this.fBroker); if(this.fDemat)p.set('demat',this.fDemat); if(this.asOf)p.set('as_of',this.asOf);
+   try{ this.d=await fetch('/api/margin-ledger?'+p.toString()).then(r=>r.json()); if(!this.fBroker && !this.fDemat) this.allDemats=(this.d.entities||[]).map(e=>e.entity); }catch(e){}
+   if(!this.repLoaded){ try{ this.rep=await fetch('/api/report-full').then(r=>r.json()); this.repLoaded=true; }catch(e){} } },
+ t(){ return this.d.totals||{}; },
+ eFilter(){ const q=(this.q||'').toLowerCase().trim(); const es=this.d.entities||[]; if(!q) return es;
+   return es.filter(e=>((e.entity||'')+' '+(e.broker||'')).toLowerCase().includes(q)); },
+ // canonical strategy code (mirrors Full Reporting)
+ canon(s){ const name=(s.strategy||''), n=name.toLowerCase(), grp=s.strategy_group||'';
+   const m=name.match(/\b(S[1-7][AB]?|FUT)\b/i); if(m) return m[1].toUpperCase();
+   if(/against investment/.test(n)) return 'S1'; if(/regular/.test(n)) return 'S2A'; if(/\bitm\b/.test(n)) return 'S2B';
+   if(/long nifty/.test(n)) return 'S6'; if(grp==='Commodity'||/commodity|gold/.test(n)) return 'S7';
+   if(grp==='Investment'||/futures for investment/.test(n)) return 'FUT';
+   if(grp==='Index'||/monthly|weekly|index/.test(n)) return 'S3';
+   if(grp==='Expiry'||/deep otm|expiry|high risk|mid risk/.test(n)) return 'S4';
+   if(grp==='Covered Calls') return 'S1'; return 'OTHER'; },
+ isExp(s){ return this.canon(s)==='S4'||s.strategy_group==='Expiry'; },
+ // strategy entries after search/broker/demat filters
+ repFiltered(){ const q=(this.q||'').toLowerCase().trim();
+   return (this.rep.strategies||[]).filter(s=>
+     (!this.fBroker||s.broker===this.fBroker) && (!this.fDemat||s.demat===this.fDemat) &&
+     (!q || ((s.strategy||'')+' '+(s.instrument||'')+' '+(s.broker||'')).toLowerCase().includes(q))); },
+ dep(){ const f=this.repFiltered(); let total=0,exp=0; f.forEach(s=>{const m=Number(s.margin_live)||0; total+=m; if(this.isExp(s))exp+=m;});
+   return {total, exp, exexp: total-exp}; },
+ STRAT_L:{S1:'S1 · CC Against Investment',S2A:'S2A · Regular CC',S2B:'S2B · ITM CC',S3:'S3 · Index Monthly/Weekly',S4:'S4 · Deep OTM Expiry',S5:'S5 · Index',S6:'S6 · Long NIFTY',S7:'S7 · Commodity',FUT:'Futures for Investment',OTHER:'Other'},
+ breakdown(){ const f=this.repFiltered(); const by=this.viewBy; const g={};
+   const keyOf=(s)=> by==='strategy'? this.canon(s) : by==='underlying'? (s.instrument||'—') : (s.broker||'—');
+   f.forEach(s=>{ const k=keyOf(s); if(!g[k]) g[k]={key:k,label:by==='strategy'?(this.STRAT_L[k]||k):k,margin:0,premium:0,pnl:0,n:0,expiry:false};
+     g[k].margin+=Number(s.margin_kite ?? s.margin_real ?? s.margin_live)||0; g[k].premium+=Number(s.premium)||0; g[k].pnl+=Number(s.pnl)||0; g[k].n++;   // live Kite first, then ledger, then estimate
+     if(by==='strategy'&&this.isExp(s)) g[k].expiry=true; });
+   const rows=Object.values(g).map(r=>({...r, yield: r.margin? Math.round(r.premium/r.margin*10000)/100 : null}));
+   rows.sort((a,b)=>b.margin-a.margin); return rows; },
+ colLabel(){ return this.viewBy==='strategy'?'Strategy':this.viewBy==='underlying'?'Underlying':'Broker'; },
+ viewSrcNote(){ return (this.viewBy==='demat'||this.viewBy==='fo')?'· actual broker margin (M-sheets)':'· deployed margin (strategy sheets)'; },
+ foPct(k){ const tot=this.t().margin_used||0; const v=k==='opt'?(this.t().margin_opt||0):(this.t().margin_fut||0); return tot? Math.round(v/tot*100):0; },
+ money(v){ if(v==null) return '—'; const s=v<0?'−':'+'; const a=Math.abs(v); if(a>=1e7) return s+'₹'+(a/1e7).toFixed(2)+'Cr'; if(a>=1e5) return s+'₹'+(a/1e5).toFixed(2)+'L'; return s+'₹'+Math.round(a).toLocaleString('en-IN'); },
+ cr(v){ return v? '₹'+(v/1e7).toFixed(2)+'Cr' : '—'; },
+ };
+}
+</script>
+{% endblock %}

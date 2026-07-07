@@ -1,0 +1,73 @@
+.venv/
+__pycache__/
+data/parquet/
+data/manifest.parquet
+results/ingestion_live.log
+results/ingestion_rejects.csv
+results/phase1_discovery.json
+*.pyc
+.DS_Store
+# never commit secrets even if anyone misplaces them
+kite_credentials.json
+kite_session.json
+*.token
+# env files (real secrets/overrides) — but keep the committed template
+.env
+.env.*
+!.env.example
+# dashboard
+data/dashboard_snapshots/
+data/cc_holdings.json
+
+# tooling
+node_modules/
+.claude/*
+!.claude/agents/
+package.json
+package-lock.json
+
+# transient logs
+results/*.log
+results/post_login_sync.log
+results/kite_session_sync.*.log
+
+# external sub-projects (separate repos, not part of this one)
+Covered Call Analyzer/
+strategies/Theta Gainers Algo Development/
+data/holdings_book.json
+data/dummy_presets.json
+
+# live data — never push to GitHub
+data/trade_journal.jsonl
+data/dummy_trades.jsonl
+data/broker_costs.json
+data/custom_strategies.json
+data/kite_ingest_log.parquet
+
+# large analysis outputs (regenerate locally) + master data workbook (LOCAL ONLY, never GitHub)
+Full strategy Reporting - including strategy notes.xlsx
+results/016_nifty_straddle_tp_sl/per_trade_results.csv
+results/exports/*.csv
+*.xlsx
+
+# ── ALL local/live data — NEVER push (journals, backups, holdings, watchlist, snapshots, parquet) ──
+data/
+
+# ── reference material — local only (~700MB; design studies + external analyzer app, not the product) ──
+Design/
+
+# ── backtesting DATA outputs — never push (code lives in analyses/*.py, writeups stay as results/**/*.md) ──
+results/**/*.csv
+results/**/*.png
+results/**/*.pdf
+results/**/*.docx
+results/**/*.json
+results/**/*.npy
+results/**/*.pkl
+
+# local reference docs (may contain process detail)
+*.docx
+
+# ── reporting workbooks / any raw data drop — local only, contains the live book ──
+Google sheet excel reporting/
+*.csv

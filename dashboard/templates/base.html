@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="en" x-data="{ dark: localStorage.getItem('thetadesk_theme') === 'dark' }" :class="{ 'dark': dark }">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>{% block title %}Theta Quant{% endblock %}</title>
+<link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+<link rel="apple-touch-icon" href="/static/icon-192.png">
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#0f1420">
+<meta name="mobile-web-app-capable" content="yes">
+<script src="https://cdn.tailwindcss.com"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+<script>
+ tailwind.config = {
+ darkMode: 'class',
+ theme: {
+ extend: {
+ fontFamily: {
+ 'sans': ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+ 'mono': ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+ },
+ colors: {
+ /* design.md neutral chrome scale (slate → muted) */
+ ink: { 0:'#ffffff', 50:'#f7f9fb', 100:'#e8ebf0', 200:'#d3dae3', 300:'#9aa4b2', 400:'#8a95a5', 500:'#5b6878', 600:'#37445a', 700:'#1c2733', 800:'#16202b', 900:'#101820' },
+ /* Blue = the only brand/action color (design.md) */
+ accent: { 50:'#eef3fc', 100:'#d3e0f5', 200:'#d3e0f5', 500:'#2f64d4', 600:'#2f64d4', 700:'#27539e' },
+ /* P&L — the only green/red, reserved for signal */
+ gain: { 50:'#e8f3ee', 100:'#e8f3ee', 500:'#15966a', 600:'#15966a', 700:'#117a56' },
+ loss: { 50:'#fbeceb', 100:'#fbeceb', 500:'#d2463c', 600:'#d2463c', 700:'#a93a33' },
+ warn: { 50:'#fbf1e2', 100:'#fbf1e2', 500:'#b7791f', 600:'#b7791f' },
+ }
+ }
+ }
+ };
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+ /* ============ Design system ============ */
+ :root {
+ /* StratDesk Design Reference — single source of truth */
+ --bg: #e9edf3; --surface: #ffffff; --border: #edf0f4;
+ --text-1: #10141b; --text-2: #5b6878; --text-3: #8a95a5;
+ --slate: #10141b; --navy: #1b3f80; --blue: #2f64d4; --blue-tint: #eef3fc; --blue-border: #d3e0f5;
+ --ink-2: #37445a; --muted-2: #9aa4b2; --line-soft: #f1f4f8; --surface-2: #f7f9fb;
+ --pos: #15966a; --neg: #d2463c; --amber: #b7791f; --mint: #5fd0a0;
+ --pos-fill: #e8f3ee; --neg-fill: #fbeceb; --amber-fill: #fbf1e2;
+ --accent-600: #2f64d4;
+ /* extra accents for section colour-coding (Sensibull-style) */
+ --teal: #0e8f97; --teal-tint: #e6f5f6; --violet: #6d4fc4; --violet-tint: #efeafb;
+ /* brand gradient (navy → blue) for the wordmark + top hairline */
+ --brand-grad: linear-gradient(90deg, #1b3f80 0%, #2f64d4 55%, #2f7fd4 100%);
+ }
+ .dark {
+ --bg: #0e141b; --surface: #18222d; --border: #2a3542;
+ --text-1: #eef2f7; --text-2: #9aa4b2; --text-3: #6b7686;
+ --slate: #0e141b; --blue: #5b8def; --blue-tint: #1b2a44; --blue-border: #2a3a55;
+ --ink-2: #c7d0db; --line-soft: #222d3a; --surface-2: #141d27;
+ --pos: #34c08a; --neg: #e2716a; --amber: #d9a441;
+ --accent-600: #5b8def;
+ --teal: #3fb8c0; --teal-tint: #133036; --violet: #9d86e6; --violet-tint: #221d3a;
+ --brand-grad: linear-gradient(90deg, #5b8def 0%, #6ea0f2 60%, #8db4f5 100%);
+ }
+ body { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; font-size: 13px; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; background: var(--bg); color: var(--text-1); -webkit-font-smoothing: antialiased; }
+ .num { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+
+ /* Surfaces — softer radius + subtle elevation (Screener/mProfit feel) */
+ .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 1px 2px rgba(16,24,40,.04), 0 5px 16px rgba(16,24,40,.045); }
+ .card-flat { background: var(--surface); border-radius: 14px; }
+ .dark .card { box-shadow: 0 1px 2px rgba(0,0,0,0.4); }
+ /* Screener-style stat tile */
+ .kpi { padding: 14px 16px; }
+ .kpi-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-3); font-weight: 600; }
+ .kpi-value { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; font-variant-numeric: tabular-nums; font-weight: 700; font-size: 22px; line-height: 1.15; letter-spacing: -0.02em; }
+ .kpi-sub { font-size: 10px; color: var(--text-3); }
+
+ /* Sidebar nav */
+ .nav-item { display: flex; align-items: center; padding: 6px 10px; border-radius: 6px; font-size: 13px; font-weight: 500; color: var(--text-2); transition: all .15s; }
+ .nav-item:hover { color: var(--text-1); background: var(--bg); }
+ .nav-item.active { background: var(--blue-tint); color: var(--blue); font-weight: 600; box-shadow: inset 2px 0 0 var(--blue); border-radius: 6px; }
+ .nav-section { font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-3); font-weight: 700; padding: 10px 8px 3px; }
+
+ /* Status pill */
+ .pill { display: inline-flex; align-items: center; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 500; line-height: 1.4; }
+
+ /* Tabular table — mProfit/Screener clean reporting look */
+ .data-table { width: 100%; font-size: 12px; border-collapse: collapse; }
+ .data-table thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); text-align: left; font-size: 10px; font-weight: 600; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; padding: 9px 12px; border-bottom: 1px solid var(--border); }
+ /* let the text-right utility win over the blanket left-align so headers sit above their data */
+ .data-table thead th.text-right, .data-table tbody td.text-right, .data-table tfoot td.text-right { text-align: right; }
+ .data-table tbody td, .data-table tfoot td { padding: 9px 12px; border-bottom: 1px solid var(--border); }
+ .data-table tbody tr:last-child td { border-bottom: 0; }
+ .data-table tbody tr:hover { background: var(--bg); }
+ /* bold total / net-worth row (mProfit footer) */
+ .data-table tr.total td { font-weight: 700; border-top: 2px solid var(--border); background: var(--bg); }
+
+ /* ── Screener-style bordered stat tile ── */
+ .kpi-tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+ .dark .kpi-tile { box-shadow: 0 1px 2px rgba(0,0,0,0.4); }
+ .kpi-tile .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-3); font-weight: 600; }
+ .kpi-tile .val { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; font-variant-numeric: tabular-nums; font-weight: 700; font-size: 22px; line-height: 1.2; letter-spacing: -0.02em; margin-top: 2px; }
+ .kpi-tile .sub { font-size: 10px; color: var(--text-3); margin-top: 1px; }
+
+ /* ── Divided KPI strip (mProfit/Screener) ── */
+ .kpi-grid { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 1px 2px rgba(0,0,0,0.04); display: grid; }
+ .dark .kpi-grid { box-shadow: 0 1px 2px rgba(0,0,0,0.4); }
+ .kpi-grid > div { padding: 12px 16px; border-top: 1px solid var(--border); border-left: 1px solid var(--border); }
+ /* hide first-row top borders & first-col left borders via nth — handled per-grid with utility overrides */
+ .kpi-grid .lbl { font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); font-weight: 600; }
+ .kpi-grid .val { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; font-variant-numeric: tabular-nums; font-weight: 700; font-size: 21px; line-height: 1.2; letter-spacing: -0.02em; }
+ .kpi-grid .sub { font-size: 10px; color: var(--text-3); margin-top: 1px; }
+
+ /* ── Segmented control / range pills ── */
+ .seg { display: inline-flex; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 2px; gap: 2px; }
+ .seg-btn { font-size: 12px; font-weight: 500; padding: 4px 11px; border-radius: 7px; color: var(--text-2); transition: all .12s; white-space: nowrap; }
+ .seg-btn:hover { color: var(--text-1); }
+ .seg-btn.on { background: var(--surface); color: var(--text-1); font-weight: 600; box-shadow: 0 1px 2px rgba(0,0,0,0.08); }
+ .dark .seg-btn.on { background: var(--text-1); color: var(--surface); }
+
+ /* ── Neutral metadata chip ── */
+ .tag { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 6px; font-size: 11px; font-weight: 500; background: var(--bg); color: var(--text-2); border: 1px solid var(--border); }
+
+ /* ── Sensibull stat strip ── */
+ .stat-strip { display: grid; gap: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,0.04); }
+ .dark .stat-strip { box-shadow: 0 1px 2px rgba(0,0,0,0.4); }
+ .stat-strip > div { padding: 11px 16px; }
+ .stat-strip .lbl { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); font-weight: 600; }
+ .stat-strip .val { font-family: 'Plus Jakarta Sans', system-ui, sans-serif; font-variant-numeric: tabular-nums; font-weight: 700; font-size: 18px; line-height: 1.25; letter-spacing: -0.02em; margin-top: 1px; }
+
+ /* ── Sensibull leg-builder row ── */
+ .row-builder { display: grid; gap: 6px; align-items: center; }
+ .row-builder input, .row-builder select { font-size: 12px; border: 1px solid var(--border); border-radius: 6px; padding: 5px 8px; }
+ .builder-head { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-3); font-weight: 600; }
+
+ /* ── Buttons (consistent across pages) ── */
+ .btn { font-size: 12px; font-weight: 500; padding: 6px 12px; border-radius: 8px; border: 1px solid var(--border); color: var(--text-1); background: var(--surface); transition: all .12s; }
+ .btn:hover { background: var(--bg); }
+ .btn-primary { font-size: 12px; font-weight: 700; padding: 6px 16px; border-radius: 8px; background: var(--blue); color: #fff; border: 1px solid transparent; box-shadow: 0 1px 2px rgba(47,100,212,.25); }
+ .btn-primary:hover { filter: brightness(1.06); }
+ .btn-ghost { font-size: 12px; font-weight: 500; padding: 6px 10px; border-radius: 8px; color: var(--text-2); }
+ .btn-ghost:hover { background: var(--bg); color: var(--text-1); }
+
+ /* ── Top-nav colour cues (Sensibull: navigating feels coloured) ── */
+ .brand-wordmark { background: var(--brand-grad); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; color: transparent; }
+ .nav-top-accent { height: 2px; background: var(--brand-grad); }
+ /* top-nav trigger/link hover + open states use the blue accent, not grey */
+ .nav-trigger:hover { background: var(--blue-tint); color: var(--blue); }
+ .nav-trigger.open { background: var(--blue-tint); color: var(--blue); box-shadow: inset 0 -2px 0 var(--blue); }
+ .nav-link:hover { background: var(--blue-tint); color: var(--blue); }
+ /* mega-menu group title with a colour-coded leading dot */
+ .menu-group-title { display: flex; align-items: center; gap: 6px; }
+ .menu-group-title::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: var(--blue); flex: none; }
+ .menu-group-title.g-blue { color: var(--blue); }   .menu-group-title.g-blue::before { background: var(--blue); }
+ .menu-group-title.g-teal { color: var(--teal); }   .menu-group-title.g-teal::before { background: var(--teal); }
+ .menu-group-title.g-amber { color: var(--amber); } .menu-group-title.g-amber::before { background: var(--amber); }
+ .menu-group-title.g-violet { color: var(--violet); } .menu-group-title.g-violet::before { background: var(--violet); }
+ /* small accent section title — a touch of warmth on uppercase headers */
+ .section-accent { color: var(--blue); }
+ /* primary card gets a subtle accent left-border (use sparingly) */
+ .card-accent { border-left: 3px solid var(--blue); }
+
+ /* Pulse */
+ @keyframes pulse-soft { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+ .pulse-soft { animation: pulse-soft 2s ease-in-out infinite; }
+
+ /* Hide native number-input spinners (eat into our usable width) */
+ input[type="number"]::-webkit-inner-spin-button,
+ input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+ input[type="number"] { -moz-appearance: textfield; appearance: textfield; }
+ /* Theme ALL form controls — without this they render white-on-white in dark mode */
+ input, select, textarea {
+ background: var(--surface);
+ color: var(--text-1);
+ border-color: var(--border);
+ }
+ input::placeholder, textarea::placeholder { color: var(--text-3); }
+ select option { background: var(--surface); color: var(--text-1); }
+ input:focus, select:focus, textarea:focus { outline: none; border-color: var(--text-2); }
+ /* Cloak */
+ [x-cloak] { display: none !important; }
+ /* Horizontal-scroll rows (mobile nav / table strips) without a visible bar */
+ .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+ .no-scrollbar::-webkit-scrollbar { display: none; }
+ /* Scrollbar */
+ ::-webkit-scrollbar { width: 8px; height: 8px; }
+ ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+ ::-webkit-scrollbar-track { background: transparent; }
+ /* Selection */
+ ::selection { background: rgba(99,102,241,0.2); }
+</style>
+</head>
+<body class="min-h-screen" x-data="{ drawer: false }">
+
+<!-- Mobile drawer backdrop -->
+<div x-show="drawer" x-cloak @click="drawer=false" class="md:hidden fixed inset-0 z-50 bg-black/40"></div>
+
+<div class="min-h-screen flex flex-col">
+ <!-- ─── GLOBAL TOP NAV (single nav: dropdowns + submenus) ─── -->
+ <div class="sticky top-0 z-40 border-b border-[var(--border)] bg-[var(--surface)] shadow-sm" style="overflow:visible"
+ x-data="{ open:null, bellOpen:false, settingsOpen:false, alerts:[], bellSeen:0,
+ client: (localStorage.getItem('tg_client')||'All'), clients:['All','RHS'],
+ initClients(){ fetch('/api/clients').then(r=>r.json()).then(j=>{ this.clients=['All',...(j.clients||['RHS'])]; }).catch(()=>{});
+   this.loadAlerts(); setInterval(()=>this.loadAlerts(), 60000); },
+ setClient(c){ this.client=c; localStorage.setItem('tg_client', c); location.reload(); },
+ async loadAlerts(){ const out=[];
+   try{ const a=await fetch('/api/live_alerts').then(r=>r.json()); (a.alerts||[]).forEach(x=>out.push({t:(x.title||x.label||x.msg||x.message||'Alert'), sub:(x.detail||x.sub||x.reason||''), kind:(x.level||x.severity||x.kind||'info')})); }catch(e){}
+   try{ const e2=await fetch('/api/dummy/events').then(r=>r.json()); ((e2.events||e2||[])).forEach(x=>out.push({t:(x.label||x.title||x.msg||x.type||'Paper event'), sub:(x.detail||x.preset||x.note||''), kind:(x.kind||x.level||'info')})); }catch(e){}
+   this.alerts=out; },
+ get bellCount(){ return this.alerts.length; },
+ secs:[
+ {k:'overview', label:'Overview', href:'/overview'},
+ {k:'holdings', label:'Holdings', href:'/holdings'},
+ {k:'strategies', label:'Strategies', groups:[
+   {title:'Expiry', items:[['Strategy','/playbook'],['Sell Timing ⏱','/expiry/timing'],['Expiry Desk','/expiry/desk'],['Expiry Report','/report'],['Chain','/chain/SENSEX'],['Dummy / Paper trades','/dummy']]},
+   {title:'Index', items:[['Monthly OTM','/index/monthly'],['Long NIFTY','/index/long']]},
+   {title:'Covered Calls', items:[['Against Investment · S1','/cc/investment'],['Regular OTM · S2A','/cc/otm'],['ITM theta · S2B','/cc/itm']]},
+   {title:'Other', items:[['Commodity · S7','/commodity'],['New strategy','/other/new']]}
+ ]},
+ {k:'report', label:'Reporting', groups:[ {title:'', items:[['Full Reporting','/report-full'],['Day / Period report','/report'],['Margin & Demats','/margin'],['Broker reco · soon','#'],['Bank reco · soon','#']]} ]},
+ {k:'research', label:'Research', groups:[ {title:'', items:[['Screener & signals','/research'],['News & info','/research'],['Prediction engine · soon','#']]} ]},
+ {k:'lab', label:'Lab', groups:[ {title:'', items:[['Strategy Builder','/builder'],['Backtesting','/backtest'],['Algo · soon','#']]} ]}
+ ] }"
+ x-init="initClients()" @click.outside="open=null" @keydown.escape="open=null">
+ <!-- thin brand-gradient accent line along the very top (subtle life cue) -->
+ <div class="nav-top-accent"></div>
+ <div class="px-3 sm:px-4 h-12 flex items-center gap-1" style="overflow:visible">
+ <!-- brand -->
+ <a href="/overview" class="flex items-baseline gap-1.5 mr-1.5 shrink-0">
+ <span class="brand-wordmark font-extrabold text-[14px] tracking-tight">Theta Quant</span>
+ <span class="hidden xl:inline text-[9px] font-mono font-bold px-1 py-0.5 rounded" style="background:var(--gain-100,#d9f2e6);color:var(--gain-700,#15966a)">v0.3</span>
+ </a>
+ <!-- desktop dropdown bar (overflow MUST stay visible — overflow-x:auto would clip the dropdowns) -->
+ <div class="hidden md:flex items-center gap-0.5 h-full min-w-0" style="overflow:visible">
+ <template x-for="sec in secs" :key="sec.k">
+ <div class="relative h-full flex items-center shrink-0" @mouseenter="sec.groups && (open=sec.k)" @mouseleave="sec.groups && (open=null)">
+ <!-- direct link (Overview/Holdings/Research/Builder) -->
+ <a x-show="sec.href" :href="sec.href || '#'" class="nav-link text-[12.5px] px-2.5 h-8 rounded-lg font-medium flex items-center whitespace-nowrap transition-colors" x-text="sec.label"></a>
+ <!-- dropdown trigger (Strategies/Reporting) — hover opens, click also toggles -->
+ <button x-show="!sec.href" @click="open = open===sec.k ? null : sec.k"
+ class="nav-trigger text-[12.5px] px-2.5 h-8 rounded-lg font-medium flex items-center gap-1 whitespace-nowrap transition-colors"
+ :class="open===sec.k ? 'open' : ''">
+ <span x-text="sec.label"></span>
+ <svg class="w-2.5 h-2.5 transition-transform" :class="open===sec.k?'rotate-180':''" viewBox="0 0 10 6" fill="none"><path d="M1 1l4 4 4-4" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+ </button>
+ <!-- mega-menu: strategy groups + their sub-strategies in columns -->
+ <div x-show="sec.groups && open===sec.k" x-cloak x-transition.origin.top.left
+ class="absolute top-full left-0 mt-px rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl p-3 z-50 flex gap-5">
+ <template x-for="g in sec.groups" :key="g.title">
+ <div class="min-w-[150px]">
+ <div x-show="g.title" class="menu-group-title text-[10px] uppercase tracking-wider font-semibold mb-1.5 px-2"
+ :class="{'g-blue':g.title==='Expiry','g-teal':g.title==='Index','g-amber':g.title==='Covered Calls','g-violet':g.title==='Other'}" x-text="g.title"></div>
+ <template x-for="it in g.items" :key="it[1]+it[0]">
+ <a :href="it[1]" @click="it[1]==='#' && $event.preventDefault(); open=null" class="block px-2 py-1.5 rounded-lg text-[12.5px] whitespace-nowrap transition-colors" :class="it[1]==='#' ? 'text-[var(--text-3)] opacity-50 cursor-default' : 'nav-link'" x-text="it[0]"></a>
+ </template>
+ </div>
+ </template>
+ </div>
+ </div>
+ </template>
+ </div>
+ <!-- right controls (notifications + client + kite + theme) — visible on all sizes -->
+ <div class="ml-auto pl-2 flex items-center gap-1.5 shrink-0">
+ <!-- notifications bell — all alerts (live market + paper SL/TP) in one place -->
+ <div class="relative" @click.outside="bellOpen=false">
+ <button @click="bellOpen=!bellOpen; bellSeen=bellCount" class="relative w-8 h-8 flex items-center justify-center rounded-lg border border-[var(--border)]" title="Notifications & alerts">
+ <svg class="w-4 h-4" viewBox="0 0 20 20" fill="none"><path d="M10 2a5 5 0 00-5 5v3l-1.4 2.8a.5.5 0 00.45.7h11.9a.5.5 0 00.45-.7L16 10V7a5 5 0 00-5-5zM8 16a2 2 0 004 0" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+ <span x-show="bellCount>bellSeen" x-cloak class="absolute -top-1 -right-1 min-w-[15px] h-[15px] px-1 rounded-full text-[9px] font-bold text-white flex items-center justify-center" style="background:#d2463c" x-text="bellCount"></span>
+ </button>
+ <div x-show="bellOpen" x-cloak class="absolute right-0 top-[40px] w-[320px] max-w-[90vw] max-h-[60vh] overflow-y-auto rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl z-50">
+ <div class="px-3 py-2 border-b border-[var(--border)] flex items-center justify-between sticky top-0 bg-[var(--surface)]">
+ <span class="text-[12px] font-semibold">Notifications &amp; alerts</span>
+ <a href="/dummy" class="text-[10px] text-[var(--blue)] font-semibold">Dummy & alerts →</a>
+ </div>
+ <template x-for="(a,i) in alerts" :key="i">
+ <div class="px-3 py-2 border-b border-[var(--border)] last:border-0 flex gap-2">
+ <span class="mt-1 w-1.5 h-1.5 rounded-full shrink-0" :class="(''+a.kind).match(/red|danger|sl|high/i)?'bg-loss-500':(''+a.kind).match(/warn|orange|tp/i)?'bg-warn-500':'bg-[var(--blue)]'"></span>
+ <div class="min-w-0"><div class="text-[12px] font-medium" x-text="a.t"></div><div class="text-[10px] text-[var(--text-3)]" x-show="a.sub" x-text="a.sub"></div></div>
+ </div>
+ </template>
+ <div x-show="!alerts.length" class="px-3 py-6 text-center text-[11px] text-[var(--text-3)]">No alerts right now. SL/TP hits & live triggers land here.</div>
+ </div>
+ </div>
+ <span class="hidden lg:inline text-[10px] uppercase tracking-[0.06em] text-[var(--text-3)] font-semibold">Client</span>
+ <select @change="setClient($event.target.value)" class="text-[12px] font-semibold border border-[var(--blue-border)] rounded-lg px-2 py-1.5 max-w-[100px]" style="background:var(--blue-tint);color:var(--blue)">
+ <template x-for="c in clients" :key="c"><option :value="c" :selected="c===client" x-text="c"></option></template>
+ </select>
+ <!-- Kite login (button + modal) -->
+ <div x-data="kiteLogin()" class="flex items-center">
+ <button @click="show=true; step1()" class="flex items-center gap-1.5 text-[12px] font-semibold rounded-lg px-2.5 py-1.5 border border-[var(--border)]" title="Daily Kite login">
+ <span id="kite-status" class="flex items-center"><span class="pulse-soft inline-block w-1.5 h-1.5 rounded-full bg-[var(--text-3)]"></span></span>
+ <span class="hidden sm:inline">Kite</span>
+ </button>
+ <div x-show="show" x-cloak class="fixed inset-0 z-[70] flex items-center justify-center bg-black/45 p-3" @click.self="show=false" style="text-align:left">
+ <div class="bg-[var(--surface)] rounded-2xl p-5 w-[95vw] max-w-[460px] max-h-[90vh] overflow-y-auto shadow-2xl text-[var(--text-1)]">
+ <div class="font-bold text-[15px] mb-1">Daily Kite login</div>
+ <div class="text-[11px] text-[var(--text-3)] mb-4 leading-snug">One login each morning makes live data flow for <b>everyone</b> on the tool — nobody else has to log in. The token lasts until ~6 AM tomorrow.</div>
+
+ <!-- MAIN flow: one click → log in on Kite → auto-detected -->
+ <a :href="loginUrl" target="_blank" @click="watch()" :class="loginUrl?'':'opacity-40 pointer-events-none'"
+    class="flex items-center justify-center gap-2 text-[13px] font-semibold text-white rounded-lg px-4 py-2.5 w-full" style="background:var(--blue)">
+   <span x-text="waiting?'Waiting for Kite…':'Log in with Kite ↗'"></span>
+   <span x-show="waiting" class="inline-block w-3.5 h-3.5 border-2 border-white/40 border-t-white rounded-full animate-spin"></span>
+ </a>
+ <div class="text-[11px] text-[var(--text-3)] mt-2 leading-snug">Opens Zerodha in a new tab. Enter your username, password &amp; PIN — when you're done it redirects back and this logs you in <b>automatically</b>. You'll see “Login successful”.</div>
+
+ <div class="text-[12px] mt-3 leading-snug font-medium" :class="okMsg?'text-gain-600':(waiting?'text-[var(--text-3)]':'text-loss-600')" x-text="msg"></div>
+
+ <!-- FALLBACK: only if auto-capture didn't fire -->
+ <div class="mt-3 border-t border-[var(--border)] pt-2">
+   <button @click="showPaste=!showPaste" class="text-[11px] text-[var(--text-3)] underline">Didn't auto-complete? Paste the link instead ▾</button>
+   <div x-show="showPaste" x-cloak class="mt-2 space-y-2">
+     <div class="text-[10px] text-[var(--text-3)]">After login the browser may land on a blank/redirect page — copy that page's full address-bar URL and paste it here.</div>
+     <textarea x-model="pasted" rows="2" placeholder="https://…request_token=XXXX…  (or just the token)" class="num w-full border border-[var(--border)] rounded-md px-2 py-1.5 text-[11px] bg-[var(--bg)]"></textarea>
+     <button @click="activate()" :disabled="busy || !pasted.trim()" class="text-[12px] font-semibold text-white rounded-md px-4 py-2 disabled:opacity-40" style="background:var(--blue)" x-text="busy?'Activating…':'Activate from link'"></button>
+   </div>
+ </div>
+ <div class="flex justify-end mt-3"><button @click="show=false; stopPoll()" class="btn text-[12px]">Close</button></div>
+ </div>
+ </div>
+ </div>
+ <!-- Settings gear menu -->
+ <div class="relative" @click.outside="settingsOpen=false">
+ <button @click="settingsOpen=!settingsOpen" class="w-8 h-8 flex items-center justify-center rounded-lg border border-[var(--border)]" title="Settings">
+ <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+ <path stroke-linecap="round" stroke-linejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.325.196.72.257 1.076.124l1.217-.456a1.125 1.125 0 011.369.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.241-.438.613-.43.992a6.759 6.759 0 010 .255c-.008.378.137.75.43.991l1.004.827c.424.35.534.955.26 1.43l-1.297 2.247a1.125 1.125 0 01-1.37.491l-1.216-.456c-.356-.133-.751-.072-1.076.124a6.57 6.57 0 01-.22.128c-.332.183-.582.495-.645.869l-.213 1.281c-.09.542-.56.94-1.11.94h-2.594c-.55 0-1.019-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.991a6.932 6.932 0 010-.255c.007-.38-.138-.751-.43-.992l-1.004-.827a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.086.22-.128.332-.183.582-.495.644-.869l.214-1.281z"/>
+ <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+ </svg>
+ </button>
+ <div x-show="settingsOpen" x-cloak class="absolute right-0 top-[40px] w-[230px] rounded-xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl py-1.5 z-50">
+ <div class="px-3 py-1 text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold">Appearance</div>
+ <button @click="dark = !dark; localStorage.setItem('thetadesk_theme', dark ? 'dark' : 'light')" class="w-full text-left flex items-center justify-between px-3 py-2 mx-0 rounded-lg text-[12.5px] hover:bg-[var(--bg)]">
+ <span x-text="dark?'Light mode':'Dark mode'"></span><span x-text="dark?'☀':'☾'"></span>
+ </button>
+ <div class="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold border-t border-[var(--border)] mt-1">Data &amp; connections</div>
+ <a href="/import" class="block px-3 py-2 rounded-lg text-[12.5px] hover:bg-[var(--bg)]">Import data &amp; templates</a>
+ <a href="/admin/demats" data-admin-only style="display:none" class="block px-3 py-2 rounded-lg text-[12.5px] hover:bg-[var(--bg)]">Demat accounts &amp; passwords</a>
+ <a href="/alerts" class="block px-3 py-2 rounded-lg text-[12.5px] hover:bg-[var(--bg)]">Alerts &amp; Telegram</a>
+ <a href="https://kite.zerodha.com" target="_blank" class="block px-3 py-2 rounded-lg text-[12.5px] hover:bg-[var(--bg)]">Kite dashboard ↗</a>
+ <div data-admin-only style="display:none">
+ <div class="px-3 pt-2 pb-1 text-[10px] uppercase tracking-wider text-[var(--text-3)] font-semibold border-t border-[var(--border)] mt-1">Admin</div>
+ <a href="/admin/users" class="block px-3 py-2 rounded-lg text-[12.5px] hover:bg-[var(--bg)]">Users &amp; access</a>
+ </div>
+ <div class="border-t border-[var(--border)] mt-1 px-3 py-2 flex items-center gap-2">
+ <div class="w-6 h-6 rounded-full bg-[var(--text-1)] text-[var(--surface)] flex items-center justify-center text-[10px] font-bold">R</div>
+ <div class="text-[11px] leading-tight"><div class="font-semibold">Rohan Shah</div><div class="text-[10px] text-[var(--text-3)]">Navin Group</div></div>
+ </div>
+ </div>
+ </div>
+ <!-- hamburger (mobile) -->
+ <button @click="open = open==='__m' ? null : '__m'" class="md:hidden w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[var(--bg)]" aria-label="Menu">
+ <svg class="w-4 h-4" viewBox="0 0 16 16" fill="none"><path d="M2 4h12M2 8h12M2 12h12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+ </button>
+ </div>
+ </div>
+ <!-- mobile menu -->
+ <div x-show="open==='__m'" x-cloak class="md:hidden border-t border-[var(--border)] max-h-[75vh] overflow-y-auto px-3 py-2 bg-[var(--surface)]">
+ <template x-for="sec in secs" :key="sec.k">
+ <div class="py-1 border-b border-[var(--border)] last:border-0">
+ <a x-show="sec.href" :href="sec.href || '#'" class="block py-2 text-[14px] font-semibold" x-text="sec.label"></a>
+ <div x-show="sec.groups">
+ <div class="text-[13px] font-bold py-1.5" x-text="sec.label"></div>
+ <template x-for="g in sec.groups" :key="g.title">
+ <div class="pl-1 pb-1">
+ <div x-show="g.title" class="menu-group-title text-[10px] uppercase font-semibold pt-1"
+ :class="{'g-blue':g.title==='Expiry','g-teal':g.title==='Index','g-amber':g.title==='Covered Calls','g-violet':g.title==='Other'}" x-text="g.title"></div>
+ <template x-for="it in g.items" :key="it[1]"><a x-show="it[1]!=='#'" :href="it[1]" class="block py-1.5 pl-2 text-[13px]" x-text="it[0]"></a><span x-show="it[1]==='#'" class="block py-1.5 pl-2 text-[13px] opacity-40" x-text="it[0]"></span></template>
+ </div>
+ </template>
+ </div>
+ </div>
+ </template>
+ </div>
+ </div>
+
+ <!-- Top status strip (Bloomberg-style — single line of market state) -->
+ <div id="topstrip" class="border-b border-[var(--border)] bg-[var(--blue-tint)] px-4 sm:px-5 py-2 num text-[11px] flex items-center gap-3.5 sm:gap-5 overflow-x-auto no-scrollbar whitespace-nowrap">
+ <span class="text-[var(--text-3)]" id="ist-clock">—</span>
+ <span class="h-3 w-px bg-[var(--border)]"></span>
+ <span><span class="text-[var(--text-3)]">SENSEX</span> <span class="font-semibold" id="topstrip-sensex">—</span></span>
+ <span><span class="text-[var(--text-3)]">NIFTY</span> <span class="font-semibold" id="topstrip-nifty">—</span></span>
+ <span><span class="text-[var(--text-3)]">VIX</span> <span class="font-semibold" id="topstrip-vix">—</span></span>
+ <span class="h-3 w-px bg-[var(--border)]"></span>
+ <span><span class="text-[var(--text-3)]">Pin</span> <span id="topstrip-mp-sensex">—</span></span>
+ <span class="ml-auto" id="topstrip-extra"></span>
+ </div>
+
+ <!-- Page content -->
+ <main class="flex-1 min-w-0">
+ <div class="px-3 sm:px-5 py-4 sm:py-5 max-w-[1400px] w-full min-w-0 mx-auto">
+ {% block content %}{% endblock %}
+ </div>
+ </main>
+</div>
+
+<!-- ─── Chat assistant (bottom-right CTA + panel) ─── -->
+<div x-data="chatbot()" class="fixed bottom-4 right-4 z-[80]" x-cloak>
+  <!-- CTA -->
+  <button x-show="!show" @click="openChat()" class="flex items-center gap-2 rounded-full shadow-xl text-white text-[13px] font-semibold pl-3.5 pr-4 py-2.5 hover:opacity-90 transition" style="background:var(--blue)">
+    <svg class="w-4 h-4" viewBox="0 0 20 20" fill="none"><path d="M3 5.5A2.5 2.5 0 015.5 3h9A2.5 2.5 0 0117 5.5v5A2.5 2.5 0 0114.5 13H8l-4 3.5V13H5.5A2.5 2.5 0 013 10.5v-5z" fill="currentColor"/></svg>
+    Ask Theta
+  </button>
+  <!-- panel -->
+  <div x-show="show" x-cloak x-transition.origin.bottom.right class="w-[92vw] max-w-[380px] h-[540px] max-h-[78vh] flex flex-col rounded-2xl border border-[var(--border)] bg-[var(--surface)] shadow-2xl overflow-hidden">
+    <div class="flex items-center justify-between px-3.5 py-2.5 border-b border-[var(--border)]" style="background:var(--blue)">
+      <div class="text-white">
+        <div class="text-[13px] font-bold leading-tight">Theta assistant</div>
+        <div class="text-[10px] opacity-80">basic help · not investment advice</div>
+      </div>
+      <button @click="show=false" class="text-white/80 hover:text-white text-[18px] leading-none">&times;</button>
+    </div>
+    <div x-ref="scroll" class="flex-1 overflow-y-auto px-3 py-3 space-y-2.5 text-[12.5px] leading-snug bg-[var(--bg)]">
+      <template x-for="(m,i) in msgs" :key="i">
+        <div :class="m.role==='user'?'flex justify-end':'flex justify-start'">
+          <div class="rounded-2xl px-3 py-2 max-w-[85%] whitespace-pre-wrap break-words"
+               :class="m.role==='user'?'text-white rounded-br-sm':'bg-[var(--surface)] border border-[var(--border)] rounded-bl-sm'"
+               :style="m.role==='user'?'background:var(--blue)':''" x-text="m.content"></div>
+        </div>
+      </template>
+      <div x-show="busy" class="flex justify-start"><div class="rounded-2xl px-3 py-2 bg-[var(--surface)] border border-[var(--border)] text-[var(--text-3)]">…</div></div>
+    </div>
+    <div class="border-t border-[var(--border)] p-2 flex items-end gap-2">
+      <textarea x-model="input" @keydown.enter.prevent="if(!$event.shiftKey) send()" rows="1" placeholder="Ask about a tab, a strategy…" class="flex-1 resize-none border border-[var(--border)] rounded-lg px-2.5 py-1.5 text-[12.5px] max-h-24 bg-[var(--bg)]"></textarea>
+      <button @click="send()" :disabled="busy || !input.trim()" class="shrink-0 text-white rounded-lg px-3 py-1.5 text-[12px] font-semibold disabled:opacity-40" style="background:var(--blue)">Send</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// Global client scope — pages read this to filter their data. 'All' = everything.
+window.tgClient = () => localStorage.getItem('tg_client') || 'All';
+window.tgClientParam = () => { const c = window.tgClient(); return (c && c !== 'All') ? ('client=' + encodeURIComponent(c)) : ''; };
+// Reusable date/period + facet filter mixin — spread into any page's x-data, then
+// call applyFilters(rows, dateKey). Drives the shared _period_filter partial.
+window.tgPeriod = function(extra){
+  const fmt = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+  return Object.assign({
+    period:(localStorage.getItem('tg_period')||'all'), pfrom:(localStorage.getItem('tg_pfrom')||''), pto:(localStorage.getItem('tg_pto')||''), sortDesc:true, fStatus:'', fBroker:'', fDemat:'', fq:'',
+    basis:(localStorage.getItem('tg_basis')||'entry'), expirySel:(localStorage.getItem('tg_expiry')||''),
+    setPeriodLocal(p){ this.period=p; localStorage.setItem('tg_period',p); },   // persist (no reload — reactive)
+    setBasis(b){ this.basis=b; localStorage.setItem('tg_basis',b); if(b!=='expiry'){ this.expirySel=''; localStorage.setItem('tg_expiry',''); } },
+    setExpiryLocal(e){ this.expirySel=e; localStorage.setItem('tg_expiry',e); },
+    monthLabel(k){ const M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec']; const p=(k||'').split('-'); return (p.length===2)?(M[+p[1]-1]+'-'+p[0].slice(2)):k; },
+    expiryOpts(rows){ const s=new Set(); (rows||[]).forEach(r=>{ const k=r.expiry_month||r.expiry||''; if(/^\d{4}-\d{2}$/.test(k)) s.add(k); }); return [...s].sort().reverse().map(k=>({key:k,label:this.monthLabel(k)})); },
+    _bounds(){
+      const now=new Date();
+      switch(this.period){
+        case 'today': return [fmt(now), fmt(now)];
+        case 'week': { const d=new Date(now); d.setDate(d.getDate()-((d.getDay()+6)%7)); return [fmt(d), fmt(now)]; }
+        case 'month': return [fmt(new Date(now.getFullYear(),now.getMonth(),1)), fmt(now)];
+        case 'lastmonth': return [fmt(new Date(now.getFullYear(),now.getMonth()-1,1)), fmt(new Date(now.getFullYear(),now.getMonth(),0))];
+        case 'quarter': return [fmt(new Date(now.getFullYear(),Math.floor(now.getMonth()/3)*3,1)), fmt(now)];
+        case 'fy': { let y=now.getFullYear(); if(now.getMonth()<3) y--; return [y+'-04-01', (y+1)+'-03-31']; }
+        case 'custom': return [this.pfrom||'', this.pto||''];
+        default: return ['',''];
+      }
+    },
+    inPeriod(ds){ ds=(ds||'').slice(0,10); if(!ds) return this.period==='all'; const [a,b]=this._bounds(); return (!a||ds>=a)&&(!b||ds<=b); },
+    passFacets(r){ const q=(this.fq||'').toLowerCase().trim();
+      const ok = (!this.fStatus||(r.status||'')===this.fStatus) && (!this.fBroker||(r.broker||'')===this.fBroker) && (!this.fDemat||((r.demat||r.client||''))===this.fDemat);
+      if(!ok) return false; if(!q) return true;
+      const txt=((r.symbol||'')+' '+(r.instrument||'')+' '+(r.strategy_name||'')+' '+(r.tier||'')+' '+(r.broker||'')+' '+(r.strategy_group||'')+' '+(r.expiry||'')+' '+((r.legs||[]).map(l=>l.strike).join(' '))).toLowerCase();
+      return txt.includes(q); },
+    facetOpts(rows, key){ return [...new Set((rows||[]).map(r=>r[key]).filter(Boolean))].sort(); },
+    periodSort(rows, key){ const k=key||'entry_date'; return [...(rows||[])].sort((x,y)=>{const a=(x[k]||''),b=(y[k]||''); return this.sortDesc?(a<b?1:a>b?-1:0):(a<b?-1:a>b?1:0);}); },
+    applyFilters(rows, dateKey){
+      const k=dateKey||'entry_date';
+      let out=(rows||[]).filter(r=>this.passFacets(r));
+      if(this.basis==='expiry'){
+        const [a,b]=this._bounds(); const am=a?a.slice(0,7):'', bm=b?b.slice(0,7):'';
+        out=out.filter(r=>{ const em=(r.expiry_month||r.expiry||'').slice(0,7);
+          if(this.expirySel) return em===this.expirySel;
+          if(!em) return this.period==='all';
+          return (!am||em>=am)&&(!bm||em<=bm); });
+        return this.periodSort(out, 'expiry_month');
+      }
+      return this.periodSort(out.filter(r=>this.inPeriod(r[k])), k);
+    },
+    filtersActive(){ return this.period!=='all'||this.fStatus||this.fBroker||this.fDemat||this.fq||this.basis==='expiry'||this.expirySel; },
+    clearFilters(){ this.period='all'; this.pfrom=''; this.pto=''; this.fStatus=''; this.fBroker=''; this.fDemat=''; this.fq=''; this.basis='entry'; this.expirySel=''; localStorage.setItem('tg_basis','entry'); localStorage.setItem('tg_expiry',''); },
+  }, extra||{});
+};
+// Global period bounds for pages without a full filter bar: returns [from,to] (YYYY-MM-DD, '' = open)
+// and a date->bool tester, both reading the global tg_period.
+window.tgPeriodBounds = function(){ const p = window.tgPeriod(); return p._bounds(); };
+window.tgInGlobalPeriod = function(ds){ return window.tgPeriod().inPeriod(ds); };
+window.tgPeriodLabel = function(){ const m={all:'All time',today:'Today',week:'This week',month:'This month',lastmonth:'Last month',quarter:'This quarter',fy:'This FY',custom:'Custom'}; return m[localStorage.getItem('tg_period')||'all']||'All time'; };
+// Chat assistant — OpenRouter-backed (free model), basic help only.
+function chatbot(){
+ return {
+ show:false, busy:false, input:'', msgs:[],
+ openChat(){ this.show=true;
+   if(!this.msgs.length) this.msgs.push({role:'assistant',content:"Hi — I'm the Theta assistant. Ask me how to use a tab, what a strategy (S1, deep-OTM expiry…) means, or a quick markets question. I don't give buy/sell advice."});
+   this.$nextTick(()=>this.scroll()); },
+ async send(){
+   const t=(this.input||'').trim(); if(!t||this.busy) return;
+   this.msgs.push({role:'user',content:t}); this.input=''; this.busy=true; this.$nextTick(()=>this.scroll());
+   try{
+     const j=await fetch('/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:this.msgs})}).then(r=>r.json());
+     this.msgs.push({role:'assistant',content:(j.reply||j.error||'Sorry, something went wrong.')});
+   }catch(e){ this.msgs.push({role:'assistant',content:'Network error — '+e}); }
+   this.busy=false; this.$nextTick(()=>this.scroll());
+ },
+ scroll(){ const el=this.$refs.scroll; if(el) el.scrollTop=el.scrollHeight; },
+ };
+}
+// Daily Kite login box — one login a day makes live data flow for everyone (single shared server session).
+function kiteLogin(){
+ return {
+ show:false, loginUrl:'', pasted:'', busy:false, msg:'', okMsg:false, showPaste:false, poll:null, waiting:false,
+ async step1(){ this.msg=''; this.okMsg=false; this.pasted=''; this.loginUrl=''; this.showPaste=false; this.stopPoll();
+ try{ const j=await fetch('/api/kite-login-url').then(r=>r.json()); this.loginUrl=j.url||''; }
+ catch(e){ this.msg='Could not build the login URL — check Kite credentials on the host.'; } },
+ // seamless: once they open Kite & log in, the host catches the redirect and saves the
+ // session — we just watch /api/health and confirm automatically. No pasting.
+ watch(){ this.waiting=true; this.msg='Waiting for you to finish login on Kite…'; this.stopPoll();
+ this.poll=setInterval(async()=>{ try{ const j=await fetch('/api/health').then(r=>r.json());
+ if(j.kite_alive){ this.stopPoll(); this.waiting=false; this.okMsg=true;
+ this.msg='✓ Login successful — live for everyone. Data is syncing.';
+ if(typeof checkHealth==='function') checkHealth(); setTimeout(()=>{ this.show=false; }, 1600); } }catch(e){} }, 2500); },
+ stopPoll(){ if(this.poll){ clearInterval(this.poll); this.poll=null; } },
+ async activate(){
+ if(!this.pasted.trim()) return;
+ this.busy=true; this.msg=''; this.okMsg=false;
+ try{
+ const j=await fetch('/api/kite-exchange',{method:'POST',headers:{'Content-Type':'application/json'},
+ body:JSON.stringify({url:this.pasted.trim()})}).then(r=>r.json());
+ if(j.success){ this.okMsg=true; this.msg='✓ Live for everyone'+(j.user_id?(' — '+j.user_id):'')+'. Data is syncing in the background.';
+ if(typeof checkHealth==='function') checkHealth();
+ setTimeout(()=>{ this.show=false; }, 1900); }
+ else { this.msg='✗ '+(j.error||'Login failed — the request token may have expired; redo step 1.'); }
+ }catch(e){ this.msg='✗ '+e; }
+ this.busy=false;
+ },
+ };
+}
+// Access pass — fetch identity, reveal admin nav, hide strategy links out of scope.
+// (Server middleware is the real boundary; this is UX so users don't click into 403s.)
+async function applyAccess() {
+ let me; try { me = await fetch('/api/me').then(r => r.json()); } catch (e) { return; }
+ window.tgMe = me;
+ document.querySelectorAll('[data-admin-only]').forEach(el => { el.style.display = me.is_admin ? '' : 'none'; });
+ if (me.is_admin) return;
+ const S = me.scopes || {};
+ const stratOK = (k) => !S.strategies || S.strategies.includes('*') || S.strategies.includes(k);
+ const MAP = [
+  [/^\/report-full(\/|$)/, 'REPORTING'], [/^\/margin(\/|$)/, 'REPORTING'],
+  [/^\/playbook(\/|$)/, 'EXPIRY'], [/^\/report(\/|$)/, 'EXPIRY'], [/^\/chain(\/|$)/, 'EXPIRY'], [/^\/manipulation(\/|$)/, 'EXPIRY'],
+  [/^\/index\/monthly(\/|$)/, 'S3'], [/^\/index\/long(\/|$)/, 'S6'],
+  [/^\/cc\/investment(\/|$)/, 'S1'], [/^\/cc\/otm(\/|$)/, 'S2A'], [/^\/cc\/itm(\/|$)/, 'S2B'],
+  [/^\/commodity(\/|$)/, 'S7'],
+ ];
+ document.querySelectorAll('a[href]').forEach(a => {
+  const href = a.getAttribute('href') || ''; if (!href.startsWith('/')) return;
+  for (const [re, k] of MAP) { if (re.test(href) && !stratOK(k)) { a.style.display = 'none'; break; } }
+ });
+ if (!me.can_write) document.body.classList.add('tg-readonly');
+}
+async function checkHealth() {
+ try {
+ const r = await fetch('/api/health');
+ const j = await r.json();
+ const el = document.getElementById('kite-status');
+ if (!el) return;
+ if (j.kite_alive) {
+ el.innerHTML = `<span class="inline-block w-1.5 h-1.5 rounded-full bg-gain-500 mr-1.5"></span>Kite live`;
+ } else {
+ el.innerHTML = `<span class="pulse-soft inline-block w-1.5 h-1.5 rounded-full bg-loss-500 mr-1.5"></span>Kite expired`;
+ }
+ const clk = document.getElementById('ist-clock');
+ if (clk) clk.textContent = `${j.ist_time} IST · ${j.weekday}`;
+ } catch (e) {}
+}
+async function updateTopstrip() {
+ try {
+ const j = await (await fetch('/api/snapshot')).json();
+ const setEl = (id, text, klass) => { const el = document.getElementById(id); if (!el) return; el.textContent = text; if (klass) el.className = 'font-semibold ' + klass; };
+ if (j.SENSEX) {
+ const c = j.SENSEX.change_pct; const cls = c >= 0 ? 'text-gain-600' : 'text-loss-600';
+ const el = document.getElementById('topstrip-sensex');
+ if (el) el.innerHTML = `<span class="font-semibold">${(j.SENSEX.spot||0).toLocaleString('en-IN')}</span> <span class="${cls}">${c>=0?'+':''}${c}%</span>`;
+ }
+ if (j.NIFTY) {
+ const c = j.NIFTY.change_pct; const cls = c >= 0 ? 'text-gain-600' : 'text-loss-600';
+ const el = document.getElementById('topstrip-nifty');
+ if (el) el.innerHTML = `<span class="font-semibold">${(j.NIFTY.spot||0).toLocaleString('en-IN')}</span> <span class="${cls}">${c>=0?'+':''}${c}%</span>`;
+ }
+ if (j.vix !== undefined) {
+ const v = j.vix; let cls = 'text-[var(--text-1)]';
+ if (v >= 22) cls = 'text-loss-600'; else if (v >= 18) cls = 'text-warn-600'; else if (v >= 16) cls = 'text-warn-500';
+ const el = document.getElementById('topstrip-vix');
+ if (el) el.innerHTML = `<span class="${cls} font-semibold">${v}</span> <span class="text-[var(--text-3)]">${j.vix_change>=0?'+':''}${j.vix_change}</span>`;
+ }
+ } catch (e) {}
+ // Max-pain "Pin" for the nearest-expiry index (separate, cached endpoint)
+ try {
+ const m = await (await fetch('/api/maxpain')).json();
+ const mp = document.getElementById('topstrip-mp-sensex');
+ if (mp && m && m.max_pain) mp.innerHTML = `<span class="font-semibold">${m.instrument} ${(m.max_pain||0).toLocaleString('en-IN')}</span>` + (m.range_low ? ` <span class="text-[var(--text-3)]">· EOD range ${m.range_low.toLocaleString('en-IN')}–${m.range_high.toLocaleString('en-IN')}</span>` : '');
+ } catch (e) {}
+}
+applyAccess(); checkHealth(); updateTopstrip();
+setInterval(checkHealth, 30000);
+setInterval(updateTopstrip, 15000);
+</script>
+
+{% block scripts %}{% endblock %}
+
+<!-- Forward a trade to WhatsApp — native share sheet in the app, wa.me on desktop -->
+<script>
+window.tgWhatsApp = function(text){
+  if(!text) return;
+  var Cap = window.Capacitor;
+  if(Cap && typeof Cap.isNativePlatform === 'function' && Cap.isNativePlatform()
+     && Cap.Plugins && Cap.Plugins.Share){
+    Cap.Plugins.Share.share({ text: text, dialogTitle: 'Forward trade' });   // → WhatsApp in the chooser
+  } else {
+    window.open('https://wa.me/?text=' + encodeURIComponent(text), '_blank'); // WhatsApp web/desktop, prefilled
+  }
+};
+// Canonical strategy code (S1/S2A/S2B/S3/S4/S5/S6/S7/FUT/OTHER) from a messy strategy
+// object — the sheet's own s_code wins, then name/group heuristics. Shared by the
+// dashboard + Full Reporting so both roll up identically.
+window.tgCanon = function(s){
+  const name=(s.strategy||s.strategy_name||''), n=name.toLowerCase(), grp=s.strategy_group||'';
+  const sc=(s.s_code||'').toUpperCase().trim();
+  if(/^S[1-8]$/.test(sc)){ if(sc==='S2') return /itm/i.test((s.sub_code||'')+n)?'S2B':'S2A'; return sc; }
+  const m=name.match(/\b(S[1-8][AB]?|FUT)\b/i); if(m) return m[1].toUpperCase();
+  if(/against inv/.test(n)) return 'S1';
+  if(/regular/.test(n)) return 'S2A';
+  if(/\bitm\b/.test(n)) return 'S2B';
+  if(/long nifty/.test(n)) return 'S6';
+  if(grp==='Commodity'||/commodity|gold/.test(n)) return 'S7';
+  if(grp==='Investment'||/futures for investment/.test(n)) return 'FUT';
+  if(grp==='Index'||/monthly|weekly|index/.test(n)) return 'S3';
+  if(grp==='Expiry'||/deep otm|expiry|high risk|mid risk/.test(n)) return 'S4';
+  if(grp==='Covered Calls') return 'S1';
+  return 'OTHER';
+};
+window.TG_STRAT_LABEL = {S1:'S1 · CC Against Investment',S2A:'S2A · Regular Covered Calls',S2B:'S2B · ITM Covered Calls',S3:'S3 · Index Monthly/Weekly',S4:'S4 · Deep OTM Expiry',S5:'S5 · Index',S6:'S6 · Long NIFTY',S7:'S7 · Commodity',S8:'S8',FUT:'Futures for Investment',OTHER:'Other'};
+window.TG_STRAT_GROUP = {S1:'Covered Calls',S2A:'Covered Calls',S2B:'Covered Calls',S3:'Index',S4:'Expiry',S5:'Index',S6:'Index',S7:'Commodity',S8:'',FUT:'Investment',OTHER:''};
+
+// Human-readable stop-loss / take-profit lines (shared by the card badge + WhatsApp).
+window.tgSlText = function(sl){
+  if(!sl || !sl.kind) return '';
+  if(sl.kind==='note') return 'SL: ' + (sl.note || '—');
+  var base = sl.kind==='spot' ? ('SL: spot within ' + (sl.value ?? '?') + ' pts of strike')
+                              : ('SL: premium ≥ ' + (sl.value ?? '?'));
+  return base + (sl.note ? ' (' + sl.note + ')' : '');
+};
+window.tgTpText = function(tp){
+  if(!tp || !tp.kind) return '';
+  if(tp.kind==='profit_pct') return 'TP: capture ' + (tp.value ?? '?') + '%';
+  if(tp.kind==='profit_amt') return 'TP: +₹' + Number(tp.value||0).toLocaleString('en-IN');
+  return 'TP: premium ≤ ' + (tp.value ?? '?');
+};
+// Build a clean, forward-ready message from a trade/strategy/recommendation object.
+window.tgTradeText = function(s){
+  if(!s) return '';
+  var L = [], name = s.strategy || s.strategy_name || s.label || 'Trade';
+  L.push('📊 ' + name);
+  var inst = s.instrument || s.symbol; if(inst) L.push(inst);
+  (s.legs || []).forEach(function(l){
+    var q = Number(l.qty) || 0;
+    if(!q && !l.strike) return;
+    var side = q < 0 ? 'SELL' : (q > 0 ? 'BUY' : '');
+    var typ = l.side || l.leg_type || '';
+    L.push((side ? side + ' ' : '') + (l.strike || '') + ' ' + typ
+           + (q ? ' x' + Math.abs(q) : '') + (l.price != null ? ' @ ' + l.price : ''));
+  });
+  var inr = function(n){ return '₹' + Number(Math.round(n)).toLocaleString('en-IN'); };
+  // Premium collected = max profit for deep-OTM selling, so we show premium only.
+  if(s.premium) L.push('Premium: ' + inr(s.premium));
+  if(s.per_cr) L.push('Yield: ₹' + Number(s.per_cr).toLocaleString('en-IN') + '/Cr');
+  var slt = tgSlText(s.sl); if(slt) L.push(slt);
+  var tpt = tgTpText(s.tp); if(tpt) L.push(tpt);
+  if(s.trade_date) L.push('Date: ' + s.trade_date);
+  return L.join('\n');
+};
+</script>
+
+<!-- App wrapper (Capacitor) helpers — no-ops in a normal browser -->
+<script>
+(function(){
+  var Cap = window.Capacitor;
+  if(!Cap || typeof Cap.isNativePlatform !== 'function' || !Cap.isNativePlatform()) return;
+  // Open EXTERNAL links (Kite, TradingView, target=_blank) in the system browser
+  // instead of replacing the app's WebView (which would strand the user off Theta Quant).
+  document.addEventListener('click', function(e){
+    var a = e.target.closest && e.target.closest('a[href]');
+    if(!a) return;
+    var href = a.getAttribute('href') || '';
+    if(!/^https?:\/\//i.test(href)) return;                 // relative → stays in app
+    var external = a.target === '_blank' || a.hostname !== window.location.hostname;
+    if(external){
+      e.preventDefault();
+      var B = Cap.Plugins && Cap.Plugins.Browser;
+      if(B){ B.open({ url: a.href }); } else { window.open(a.href, '_system'); }
+    }
+  }, true);
+  // Android hardware back → WebView history back (else it closes the app).
+  var App = Cap.Plugins && Cap.Plugins.App;
+  if(App && App.addListener){
+    App.addListener('backButton', function(ev){
+      if(window.history.length > 1){ window.history.back(); }
+      else if(ev && ev.canGoBack === false){ App.exitApp && App.exitApp(); }
+    });
+  }
+})();
+</script>
+</body>
+</html>

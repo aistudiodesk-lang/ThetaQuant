@@ -1,0 +1,21 @@
+# Never bake data or secrets into the image — they mount as volumes at runtime.
+data/
+results/
+**/dashboard_snapshots/
+*.jsonl
+*.parquet
+.git/
+.github/
+**/__pycache__/
+*.pyc
+.venv/
+venv/
+node_modules/
+app-android/
+*.apk
+.env
+.env.*
+!.env.example
+*.xlsx
+*.xls
+**/.DS_Store
