@@ -1,0 +1,7 @@
+{
+  "functions": {
+    "dashboard/server.py": {
+      "includeFiles": "dashboard/templates/**,dashboard/static/**,lib/**"
+    }
+  }
+}
