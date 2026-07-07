@@ -1104,7 +1104,10 @@ def _pivot_levels(prev_high: float, prev_low: float, prev_close: float) -> dict:
 # ── /api/recommendations — the new tiered recommendation endpoint ──────
 # ── Daily snapshot persistence (Report → Historical view) ───────────────
 SNAPSHOT_DIR = ROOT / "data" / "dashboard_snapshots"
-SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+except OSError:
+    pass  # read-only fs (Vercel serverless)
 
 
 @app.post("/api/snapshot/save")
