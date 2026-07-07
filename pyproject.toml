@@ -18,6 +18,3 @@ dependencies = [
     "supabase>=2.0",
     "python-dotenv>=1.0",
 ]
-
-[tool.vercel]
-entrypoint = "dashboard.server:app"
