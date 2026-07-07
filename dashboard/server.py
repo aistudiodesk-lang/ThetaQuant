@@ -53,16 +53,19 @@ def _web_creds() -> dict:
     # in source). Printed once to the console so the operator can note it; the real
     # accounts are the per-user store. Rotate/delete this file to reset.
     import secrets as _sec
-    _WEB_CRED_FILE.parent.mkdir(parents=True, exist_ok=True)
     default = {"username": "team", "password": _sec.token_urlsafe(18)}
-    _WEB_CRED_FILE.write_text(json.dumps(default, indent=2))
     try:
-        _WEB_CRED_FILE.chmod(0o600)
+        _WEB_CRED_FILE.parent.mkdir(parents=True, exist_ok=True)
+        _WEB_CRED_FILE.write_text(json.dumps(default, indent=2))
+        try:
+            _WEB_CRED_FILE.chmod(0o600)
+        except Exception:
+            pass
+        print(f"[thetadesk] generated legacy master login → user 'team', "
+              f"password '{default['password']}' (stored at {_WEB_CRED_FILE}); "
+              f"prefer the per-user accounts.")
     except Exception:
-        pass
-    print(f"[thetadesk] generated legacy master login → user 'team', "
-          f"password '{default['password']}' (stored at {_WEB_CRED_FILE}); "
-          f"prefer the per-user accounts.")
+        pass  # read-only fs (e.g. Vercel serverless) — run without legacy file
     return default
 
 
@@ -244,8 +247,9 @@ async def _basic_auth(request: Request, call_next):
             if u:
                 return (_admit(u)) or await call_next(request)
             # legacy master account → full admin (never lock yourself out)
-            if (_secrets.compare_digest(user, cred.get("username", "")) and
-                    _secrets.compare_digest(pw, cred.get("password", ""))):
+            _cred = cred if isinstance(cred, dict) else {}
+            if (_secrets.compare_digest(user, _cred.get("username", "")) and
+                    _secrets.compare_digest(pw, _cred.get("password", ""))):
                 return (_admit(_access.ADMIN)) or await call_next(request)
         except Exception:
             pass
