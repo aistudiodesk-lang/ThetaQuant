@@ -1,6 +1,9 @@
 {
+  "rewrites": [
+    { "source": "/(.*)", "destination": "/api/index" }
+  ],
   "functions": {
-    "dashboard/server.py": {
+    "api/index.py": {
       "includeFiles": "**"
     }
   }
